@@ -15,7 +15,7 @@ from pathlib import Path
 # ============================================================
 
 st.set_page_config(
-    page_title="WorkTime",
+    page_title="CỘT SỐNG MUU SINH",
     page_icon="🕐",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -491,14 +491,18 @@ ensure_default_admin()
 if st.session_state.current_user is None:
 
     st.markdown("""
-    <div class="login-box">
+    <div class="login-box" style="max-width: 900px; margin-top: 5vh;">
 
-        <div class="login-title">
-            🕐 WorkTime
-        </div>
-
-        <div class="login-sub">
-            Chấm công hiện đại • nhiều người • minh bạch
+        <div style="
+            text-align:center;
+            font-size: clamp(42px, 6vw, 78px);
+            line-height: 1.05;
+            font-weight: 900;
+            letter-spacing: -2px;
+            margin-bottom: 32px;
+            color: #15162a;
+        ">
+            CỘT SỐNG MUU SINH
         </div>
 
     </div>
@@ -548,9 +552,7 @@ if st.session_state.current_user is None:
                 )
 
     st.caption(
-        "Tài khoản quản trị lần đầu: "
-        "**admin / admin123**. "
-        "Hãy đổi mật khẩu ngay sau khi đăng nhập."
+        "Tài khoản quản trị lần đầu: **Lâu / 1**"
     )
 
     st.stop()
