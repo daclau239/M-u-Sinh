@@ -459,13 +459,21 @@ if "current_user" not in st.session_state:
 
 # Tạo admin mặc định lần đầu
 def ensure_default_admin():
+    """
+    Tạo tài khoản Admin mặc định nếu database chưa có.
+    Nếu database cũ đã tồn tại tài khoản 'admin' từ phiên bản trước,
+    vẫn tạo thêm tài khoản 'Lâu' để bé đăng nhập bằng Lâu / 1.
+    """
     conn = get_conn()
 
-    count = conn.execute(
-        "SELECT COUNT(*) FROM user_accounts"
-    ).fetchone()[0]
+    row = conn.execute("""
+        SELECT id
+        FROM user_accounts
+        WHERE username=?
+        LIMIT 1
+    """, ("Lâu",)).fetchone()
 
-    if count == 0:
+    if row is None:
         salt, password_hash = make_password("1")
 
         conn.execute("""
@@ -480,10 +488,26 @@ def ensure_default_admin():
             password_hash,
             salt
         ))
+    else:
+        # Đồng bộ đúng tài khoản Admin mà bé yêu cầu.
+        salt, password_hash = make_password("1")
 
-        conn.commit()
+        conn.execute("""
+            UPDATE user_accounts
+            SET password_hash=?,
+                salt=?,
+                role='admin',
+                active=1
+            WHERE username=?
+        """, (
+            password_hash,
+            salt,
+            "Lâu"
+        ))
 
+    conn.commit()
     conn.close()
+
 
 
 ensure_default_admin()
@@ -491,23 +515,12 @@ ensure_default_admin()
 
 if st.session_state.current_user is None:
 
-    st.markdown(textwrap.dedent("""
-    <div class="login-box" style="max-width: 900px; margin-top: 5vh;">
-
-        <div style="
-            text-align:center;
-            font-size: clamp(42px, 6vw, 78px);
-            line-height: 1.05;
-            font-weight: 900;
-            letter-spacing: -2px;
-            margin-bottom: 32px;
-            color: #15162a;
-        ">
-            CỘT SỐNG MUU SINH
-        </div>
-
-    </div>
-    """), unsafe_allow_html=True)
+    st.markdown(
+        '<div style="text-align:center; font-size:clamp(42px,6vw,78px); '
+        'font-weight:900; letter-spacing:-2px; margin:20px 0 32px; '
+        'color:#15162a;">CỘT SỐNG MUU SINH</div>',
+        unsafe_allow_html=True
+    )
 
     with st.container(border=True):
 
@@ -521,7 +534,8 @@ if st.session_state.current_user is None:
         password = st.text_input(
             "Mật khẩu",
             type="password",
-            placeholder="Nhập mật khẩu"
+            placeholder="Nhập mật khẩu",
+            autocomplete="current-password"
         )
 
         if st.button(
