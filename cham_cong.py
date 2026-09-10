@@ -8,6 +8,7 @@ import csv
 import io
 from datetime import date, datetime
 from pathlib import Path
+import matplotlib.pyplot as plt
 
 # ============================================================
 # CỘT SỐNG MUU SINH — CHẤM CÔNG
@@ -916,33 +917,34 @@ for week in calendar.monthcalendar(
 
 
 # ============================================================
-# XUẤT CÁ NHÂN
+# XUẤT BẢNG CÔNG CÁ NHÂN
 # ============================================================
 
 st.divider()
 
-st.subheader(
-    "📥 Xuất bảng công cá nhân"
+st.subheader("📥 Xuất bảng công của tôi")
+
+st.caption(
+    f"Xuất bảng công riêng của **{user['full_name']}** "
+    f"trong tháng {month:02d}/{year}."
 )
 
-rows = [[
+# ------------------------- CSV cá nhân ----------------------
+
+personal_rows = [[
     "Ngày",
     "Ca sáng",
     "Ca chiều",
     "Ca tối",
+    "Tổng ca",
     "Tổng giờ",
     "Tiền công",
 ]]
 
-
 for day in range(
     1,
-    calendar.monthrange(
-        year,
-        month,
-    )[1] + 1,
+    calendar.monthrange(year, month)[1] + 1,
 ):
-
     work_date = (
         f"{year}-"
         f"{month:02d}-"
@@ -958,31 +960,226 @@ for day in range(
         for shift in shifts
     )
 
-    rows.append([
+    personal_rows.append([
         work_date,
         "Có" if "Ca sáng" in shifts else "",
         "Có" if "Ca chiều" in shifts else "",
         "Có" if "Ca tối" in shifts else "",
+        len(shifts),
         daily_hours,
         daily_hours * float(settings["salary"]),
     ])
 
-
 csv_buffer = io.StringIO()
+csv.writer(csv_buffer).writerows(personal_rows)
 
-csv.writer(
-    csv_buffer
-).writerows(rows)
+c1, c2 = st.columns(2)
+
+with c1:
+    st.download_button(
+        "⬇️ Tải bảng công CSV",
+        csv_buffer.getvalue().encode("utf-8-sig"),
+        f"bang_cong_ca_nhan_{year}_{month:02d}.csv",
+        "text/csv",
+        use_container_width=True,
+    )
 
 
-st.download_button(
-    "⬇️ Tải CSV",
-    csv_buffer.getvalue().encode("utf-8-sig"),
-    f"cham_cong_{year}_{month:02d}.csv",
-    "text/csv",
-    use_container_width=True,
-)
+# -------------------------- PNG cá nhân ---------------------
 
+def build_personal_attendance_png():
+    # Chỉ đưa các ngày có chấm công vào ảnh để bảng gọn và dễ đối chiếu.
+    rows = []
+
+    for day in range(
+        1,
+        calendar.monthrange(year, month)[1] + 1,
+    ):
+        work_date = (
+            f"{year}-"
+            f"{month:02d}-"
+            f"{day:02d}"
+        )
+
+        shifts = get_day_shifts(
+            attendance.get(work_date)
+        )
+
+        if not shifts:
+            continue
+
+        daily_hours = sum(
+            hour_map[shift]
+            for shift in shifts
+        )
+
+        rows.append([
+            f"{day:02d}/{month:02d}",
+            "✓" if "Ca sáng" in shifts else "",
+            "✓" if "Ca chiều" in shifts else "",
+            "✓" if "Ca tối" in shifts else "",
+            str(len(shifts)),
+            f"{daily_hours:g}",
+            f"{daily_hours * float(settings['salary']):,.0f}",
+        ])
+
+    # Nếu tháng chưa có ngày nào chấm, vẫn tạo ảnh xác nhận.
+    if not rows:
+        rows = [["—", "", "", "", "0", "0", "0"]]
+
+    fig_height = max(4.5, 1.65 + len(rows) * 0.42)
+
+    fig, ax = plt.subplots(
+        figsize=(12, fig_height),
+        dpi=180,
+    )
+
+    ax.axis("off")
+
+    ax.text(
+        0.5,
+        0.97,
+        "CỘT SỐNG MUU SINH",
+        ha="center",
+        va="top",
+        fontsize=22,
+        fontweight="bold",
+        transform=ax.transAxes,
+    )
+
+    ax.text(
+        0.5,
+        0.91,
+        f"BẢNG CHẤM CÔNG CÁ NHÂN • THÁNG {month:02d}/{year}",
+        ha="center",
+        va="top",
+        fontsize=13,
+        fontweight="bold",
+        transform=ax.transAxes,
+    )
+
+    ax.text(
+        0.5,
+        0.865,
+        (
+            f"Nhân viên: {user['full_name']}   •   "
+            f"Username: {user['username']}"
+        ),
+        ha="center",
+        va="top",
+        fontsize=10.5,
+        transform=ax.transAxes,
+    )
+
+    columns = [
+        "Ngày",
+        "Sáng",
+        "Chiều",
+        "Tối",
+        "Số ca",
+        "Giờ",
+        "Tiền công (VNĐ)",
+    ]
+
+    table = ax.table(
+        cellText=rows,
+        colLabels=columns,
+        cellLoc="center",
+        colLoc="center",
+        bbox=[0.03, 0.16, 0.94, 0.64],
+        colWidths=[
+            0.12,
+            0.10,
+            0.10,
+            0.10,
+            0.10,
+            0.11,
+            0.27,
+        ],
+    )
+
+    table.auto_set_font_size(False)
+    table.set_fontsize(9.5)
+
+    for (row_idx, col_idx), cell in table.get_celld().items():
+        cell.set_edgecolor("#C7CBD6")
+        cell.set_linewidth(0.65)
+
+        if row_idx == 0:
+            cell.set_text_props(weight="bold")
+            cell.set_height(0.06)
+
+    # Tổng tháng ở cuối ảnh.
+    ax.text(
+        0.03,
+        0.105,
+        f"Ngày làm: {working_days}",
+        fontsize=10.5,
+        fontweight="bold",
+        transform=ax.transAxes,
+    )
+
+    ax.text(
+        0.28,
+        0.105,
+        f"Tổng ca: {total_shifts}",
+        fontsize=10.5,
+        fontweight="bold",
+        transform=ax.transAxes,
+    )
+
+    ax.text(
+        0.51,
+        0.105,
+        f"Tổng giờ: {total_hours:g}",
+        fontsize=10.5,
+        fontweight="bold",
+        transform=ax.transAxes,
+    )
+
+    ax.text(
+        0.75,
+        0.105,
+        f"Tiền công: {total_money:,.0f} VNĐ",
+        fontsize=10.5,
+        fontweight="bold",
+        transform=ax.transAxes,
+    )
+
+    ax.text(
+        0.03,
+        0.055,
+        (
+            "Ảnh đối chiếu được tạo trực tiếp từ dữ liệu chấm công "
+            "của tài khoản hiện tại."
+        ),
+        fontsize=8.5,
+        transform=ax.transAxes,
+    )
+
+    output = io.BytesIO()
+
+    fig.savefig(
+        output,
+        format="png",
+        bbox_inches="tight",
+        facecolor="white",
+    )
+
+    plt.close(fig)
+
+    output.seek(0)
+    return output.getvalue()
+
+
+with c2:
+    st.download_button(
+        "🖼️ Xuất HÌNH ẢNH bảng công",
+        build_personal_attendance_png(),
+        f"bang_cong_ca_nhan_{year}_{month:02d}.png",
+        "image/png",
+        use_container_width=True,
+    )
 
 # ============================================================
 # ADMIN
@@ -1310,27 +1507,22 @@ if user["role"] == "admin":
             if employee["active"]
         ]
 
-        table = [[
-            "Nhân viên",
-            "Ngày làm",
-            "Tổng ca",
-            "Tổng giờ",
-            "Tiền công",
-        ]]
+        # Bảng Admin: cột đầu tiên là TÊN ĐĂNG NHẬP,
+        # đúng với cách bé muốn nhận diện từng tài khoản.
+        table_rows = []
 
         for employee in users:
 
-            employee_attendance = (
-                get_month_attendance(
-                    employee["id"],
-                    year,
-                    month,
-                )
+            employee_attendance = get_month_attendance(
+                employee["id"],
+                year,
+                month,
             )
 
             employee_days = sum(
-                bool(get_day_shifts(row))
+                1
                 for row in employee_attendance.values()
+                if get_day_shifts(row)
             )
 
             employee_shifts = sum(
@@ -1341,8 +1533,7 @@ if user["role"] == "admin":
             employee_hours = sum(
                 sum(
                     hour_map[shift]
-                    for shift
-                    in get_day_shifts(row)
+                    for shift in get_day_shifts(row)
                 )
                 for row in employee_attendance.values()
             )
@@ -1352,38 +1543,87 @@ if user["role"] == "admin":
                 * float(settings["salary"])
             )
 
-            table.append([
-                employee["full_name"],
+            table_rows.append([
+                employee["username"],
                 employee_days,
                 employee_shifts,
                 employee_hours,
                 employee_money,
             ])
 
+        # Dùng DataFrame với đúng 5 tên cột.
+        import pandas as pd
+
+        admin_df = pd.DataFrame(
+            table_rows,
+            columns=[
+                "Tên đăng nhập",
+                "Ngày làm",
+                "Tổng ca",
+                "Tổng giờ",
+                "Tiền công",
+            ],
+        )
+
         st.dataframe(
-            table[1:],
+            admin_df,
             column_config={
-                0: "Nhân viên",
-                1: "Ngày làm",
-                2: "Tổng ca",
-                3: st.column_config.NumberColumn(
-                    "Tổng giờ",
-                    format="%.1f",
+                "Tên đăng nhập": st.column_config.TextColumn(
+                    "Tên đăng nhập"
                 ),
-                4: st.column_config.NumberColumn(
+                "Ngày làm": st.column_config.NumberColumn(
+                    "Ngày làm",
+                    format="%d"
+                ),
+                "Tổng ca": st.column_config.NumberColumn(
+                    "Tổng ca",
+                    format="%d"
+                ),
+                "Tổng giờ": st.column_config.NumberColumn(
+                    "Tổng giờ",
+                    format="%.1f"
+                ),
+                "Tiền công": st.column_config.NumberColumn(
                     "Tiền công",
-                    format="%.0f đ",
+                    format="%.0f đ"
                 ),
             },
             hide_index=True,
             use_container_width=True,
         )
 
-        output = io.StringIO()
+        # Tổng toàn bộ nhân viên
+        grand_days = sum(row[1] for row in table_rows)
+        grand_shifts = sum(row[2] for row in table_rows)
+        grand_hours = sum(row[3] for row in table_rows)
+        grand_money = sum(row[4] for row in table_rows)
 
-        csv.writer(
-            output
-        ).writerows(table)
+        st.write("")
+        g1, g2, g3, g4 = st.columns(4)
+
+        with g1:
+            st.metric("📅 Tổng ngày", grand_days)
+
+        with g2:
+            st.metric("🎫 Tổng ca", grand_shifts)
+
+        with g3:
+            st.metric("⏱️ Tổng giờ", f"{grand_hours:g}")
+
+        with g4:
+            st.metric("💰 Tổng tiền", f"{grand_money:,.0f} đ")
+
+        # Xuất đúng bảng Admin theo tên đăng nhập.
+        output = io.StringIO()
+        csv.writer(output).writerow([
+            "Tên đăng nhập",
+            "Ngày làm",
+            "Tổng ca",
+            "Tổng giờ",
+            "Tiền công",
+        ])
+
+        csv.writer(output).writerows(table_rows)
 
         st.download_button(
             "⬇️ Xuất bảng công",
