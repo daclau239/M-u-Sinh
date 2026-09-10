@@ -8,6 +8,7 @@ import csv
 import io
 from datetime import date, datetime
 from pathlib import Path
+from PIL import Image, ImageDraw, ImageFont
 
 # ============================================================
 # CỘT SỐNG MUU SINH — CHẤM CÔNG
@@ -925,7 +926,8 @@ st.subheader("📥 Xuất bảng công của tôi")
 
 st.caption(
     f"Bảng công riêng của {user['username']} · "
-    f"Tháng {month:02d}/{year}"
+    f"Tháng {month:02d}/{year}. "
+    "Ảnh xuất ra là lịch trọn tháng trên 1 trang A4 ngang."
 )
 
 personal_rows = [[
@@ -935,16 +937,14 @@ personal_rows = [[
     "Tối",
     "Số ca",
     "Tổng giờ",
-    "Tiền công"
+    "Tiền công",
 ]]
 
 for day in range(
     1,
     calendar.monthrange(year, month)[1] + 1
 ):
-    work_date = (
-        f"{year}-{month:02d}-{day:02d}"
-    )
+    work_date = f"{year}-{month:02d}-{day:02d}"
 
     shifts = get_day_shifts(
         attendance.get(work_date)
@@ -960,34 +960,17 @@ for day in range(
         "✓" if "Ca sáng" in shifts else "",
         "✓" if "Ca chiều" in shifts else "",
         "✓" if "Ca tối" in shifts else "",
-        str(len(shifts)),
-        f"{daily_hours:g}",
-        f"{daily_hours * float(settings['salary']):,.0f}"
+        len(shifts),
+        daily_hours,
+        daily_hours * float(settings["salary"]),
     ])
-
-# Hiện bảng ngay trên app.
-st.dataframe(
-    personal_rows[1:],
-    column_config={
-        "Ngày": "Ngày",
-        "Sáng": "🌅 Sáng",
-        "Chiều": "🌇 Chiều",
-        "Tối": "🌙 Tối",
-        "Số ca": st.column_config.NumberColumn("Số ca"),
-        "Tổng giờ": st.column_config.TextColumn("Tổng giờ"),
-        "Tiền công": st.column_config.TextColumn("Tiền công"),
-    },
-    hide_index=True,
-    use_container_width=True,
-)
-
-# CSV
-csv_buffer = io.StringIO()
-csv.writer(csv_buffer).writerows(personal_rows)
 
 c1, c2 = st.columns(2)
 
 with c1:
+    csv_buffer = io.StringIO()
+    csv.writer(csv_buffer).writerows(personal_rows)
+
     st.download_button(
         "⬇️ Tải CSV",
         csv_buffer.getvalue().encode("utf-8-sig"),
@@ -997,171 +980,412 @@ with c1:
     )
 
 
-# SVG IMAGE — không cần matplotlib/pandas, chạy ổn trên Streamlit Cloud.
-def build_attendance_svg():
-    visible_rows = [
-        row for row in personal_rows[1:]
-        if any(row[1:4])
+def font(size, bold=False):
+    candidates = []
+
+    if bold:
+        candidates.extend([
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+        ])
+    else:
+        candidates.extend([
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        ])
+
+    candidates.extend([
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    ])
+
+    for path in candidates:
+        if Path(path).exists():
+            return ImageFont.truetype(path, size=size)
+
+    return ImageFont.load_default()
+
+
+def make_a4_calendar_png():
+    # A4 landscape at roughly 300 dpi.
+    W, H = 3508, 2480
+
+    img = Image.new(
+        "RGB",
+        (W, H),
+        "white"
+    )
+
+    draw = ImageDraw.Draw(img)
+
+    title_font = font(92, True)
+    subtitle_font = font(46, True)
+    name_font = font(38, True)
+    weekday_font = font(34, True)
+    date_font = font(40, True)
+    shift_font = font(29, True)
+    normal_font = font(27, False)
+    summary_font = font(34, True)
+    footer_font = font(22, False)
+
+    margin_x = 115
+    top = 95
+
+    # ---- Title ----
+    title = "CỘT SỐNG MUU SINH"
+
+    bbox = draw.textbbox(
+        (0, 0),
+        title,
+        font=title_font
+    )
+
+    draw.text(
+        (
+            (W - (bbox[2] - bbox[0])) / 2,
+            top,
+        ),
+        title,
+        fill="#1b1c2e",
+        font=title_font,
+    )
+
+    title_bottom = top + (bbox[3] - bbox[1])
+
+    subtitle = (
+        f"BẢNG CHẤM CÔNG CÁ NHÂN • "
+        f"THÁNG {month:02d}/{year}"
+    )
+
+    bbox2 = draw.textbbox(
+        (0, 0),
+        subtitle,
+        font=subtitle_font
+    )
+
+    draw.text(
+        (
+            (W - (bbox2[2] - bbox2[0])) / 2,
+            title_bottom + 20,
+        ),
+        subtitle,
+        fill="#3b3d4f",
+        font=subtitle_font,
+    )
+
+    name = (
+        f"Nhân viên: {user['username']} "
+        f"• {user['full_name']}"
+    )
+
+    bbox3 = draw.textbbox(
+        (0, 0),
+        name,
+        font=name_font
+    )
+
+    draw.text(
+        (
+            (W - (bbox3[2] - bbox3[0])) / 2,
+            title_bottom + 82,
+        ),
+        name,
+        fill="#616475",
+        font=name_font,
+    )
+
+    # ---- Calendar ----
+    cal_top = title_bottom + 155
+    cal_left = margin_x
+    cal_width = W - margin_x * 2
+
+    last_day = calendar.monthrange(
+        year,
+        month
+    )[1]
+
+    weeks = calendar.monthcalendar(
+        year,
+        month
+    )
+
+    # All months fit in 6 rows.
+    rows = len(weeks)
+    weekday_h = 70
+    cell_w = cal_width / 7
+    cell_h = 250
+
+    # Weekday headers
+    weekdays = [
+        "T2",
+        "T3",
+        "T4",
+        "T5",
+        "T6",
+        "T7",
+        "CN",
     ]
 
-    if not visible_rows:
-        visible_rows = [[
-            "Chưa chấm công",
-            "",
-            "",
-            "",
-            "0",
-            "0",
-            "0"
-        ]]
+    for i, wd in enumerate(weekdays):
+        x0 = cal_left + i * cell_w
+        x1 = x0 + cell_w
 
-    row_h = 32
-    header_h = 42
-    title_h = 110
-    footer_h = 80
-    width = 1100
-    height = title_h + header_h + row_h * len(visible_rows) + footer_h
+        draw.rounded_rectangle(
+            (
+                int(x0 + 4),
+                int(cal_top),
+                int(x1 - 4),
+                int(cal_top + weekday_h),
+            ),
+            radius=18,
+            fill="#eceef4",
+            outline="#d3d6df",
+            width=2,
+        )
 
-    headers = [
-        ("Ngày", 150),
-        ("Sáng", 105),
-        ("Chiều", 105),
-        ("Tối", 105),
-        ("Số ca", 100),
-        ("Tổng giờ", 120),
-        ("Tiền công (VNĐ)", 210),
+        bb = draw.textbbox(
+            (0, 0),
+            wd,
+            font=weekday_font,
+        )
+
+        draw.text(
+            (
+                (x0 + x1 - (bb[2] - bb[0])) / 2,
+                cal_top + 18,
+            ),
+            wd,
+            fill="#4d5060",
+            font=weekday_font,
+        )
+
+    # Shift colors
+    shift_fill = {
+        "Ca sáng": "#FFF0B8",
+        "Ca chiều": "#DDEBFF",
+        "Ca tối": "#EADFFF",
+    }
+
+    shift_short = {
+        "Ca sáng": "SÁNG",
+        "Ca chiều": "CHIỀU",
+        "Ca tối": "TỐI",
+    }
+
+    shift_order = [
+        "Ca sáng",
+        "Ca chiều",
+        "Ca tối",
     ]
 
-    # XML escape
-    def esc(value):
-        return (
-            str(value)
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;")
-        )
+    for r, week in enumerate(weeks):
 
-    x_positions = [0]
-    for _, col_w in headers:
-        x_positions.append(x_positions[-1] + col_w)
+        for c, day in enumerate(week):
 
-    svg = []
-    svg.append(
-        f'<svg xmlns="http://www.w3.org/2000/svg" '
-        f'width="{width}" height="{height}" viewBox="0 0 {width} {height}">'
-    )
-    svg.append(
-        '<rect width="100%" height="100%" fill="white"/>'
-    )
+            x0 = cal_left + c * cell_w
+            y0 = cal_top + weekday_h + r * cell_h
+            x1 = x0 + cell_w
+            y1 = y0 + cell_h
 
-    # Title
-    svg.append(
-        f'<text x="{width/2}" y="34" text-anchor="middle" '
-        f'font-family="Arial, sans-serif" font-size="26" font-weight="700">'
-        f'CỘT SỐNG MUU SINH</text>'
-    )
-    svg.append(
-        f'<text x="{width/2}" y="63" text-anchor="middle" '
-        f'font-family="Arial, sans-serif" font-size="17" font-weight="700">'
-        f'BẢNG CHẤM CÔNG CÁ NHÂN · THÁNG {month:02d}/{year}</text>'
-    )
-    svg.append(
-        f'<text x="{width/2}" y="88" text-anchor="middle" '
-        f'font-family="Arial, sans-serif" font-size="14">'
-        f'Nhân viên: {esc(user["username"])}</text>'
-    )
-
-    table_y = title_h
-
-    # Header background
-    svg.append(
-        f'<rect x="0" y="{table_y}" width="{width}" height="{header_h}" fill="#eceef3"/>'
-    )
-
-    # Vertical lines/header text
-    for idx, (name, col_w) in enumerate(headers):
-        x = x_positions[idx]
-        svg.append(
-            f'<line x1="{x}" y1="{table_y}" x2="{x}" '
-            f'y2="{table_y + header_h + row_h*len(visible_rows)}" '
-            f'stroke="#c7cad4" stroke-width="1"/>'
-        )
-        svg.append(
-            f'<text x="{x + col_w/2}" y="{table_y + 27}" '
-            f'text-anchor="middle" font-family="Arial, sans-serif" '
-            f'font-size="13" font-weight="700">{esc(name)}</text>'
-        )
-
-    # Rows
-    for r_idx, row in enumerate(visible_rows):
-        y0 = table_y + header_h + r_idx * row_h
-
-        if r_idx % 2 == 1:
-            svg.append(
-                f'<rect x="0" y="{y0}" width="{width}" height="{row_h}" fill="#fafbfc"/>'
+            draw.rounded_rectangle(
+                (
+                    int(x0 + 4),
+                    int(y0 + 4),
+                    int(x1 - 4),
+                    int(y1 - 4),
+                ),
+                radius=18,
+                fill="#fbfcfe",
+                outline="#cfd2db",
+                width=3,
             )
 
-        svg.append(
-            f'<line x1="0" y1="{y0}" x2="{width}" y2="{y0}" '
-            f'stroke="#dfe2e8" stroke-width="1"/>'
-        )
+            if day == 0:
+                continue
 
-        for c_idx, value in enumerate(row):
-            x = x_positions[c_idx]
-            col_w = headers[c_idx][1]
-            svg.append(
-                f'<text x="{x + col_w/2}" y="{y0 + 21}" '
-                f'text-anchor="middle" font-family="Arial, sans-serif" '
-                f'font-size="12">{esc(value)}</text>'
+            work_date = (
+                f"{year}-"
+                f"{month:02d}-"
+                f"{day:02d}"
             )
 
-    bottom = table_y + header_h + row_h * len(visible_rows)
+            shifts = get_day_shifts(
+                attendance.get(work_date)
+            )
 
-    svg.append(
-        f'<line x1="0" y1="{bottom}" x2="{width}" y2="{bottom}" '
-        f'stroke="#c7cad4" stroke-width="1"/>'
-    )
-    svg.append(
-        f'<line x1="{width}" y1="{table_y}" x2="{width}" y2="{bottom}" '
-        f'stroke="#c7cad4" stroke-width="1"/>'
+            # Date
+            draw.text(
+                (
+                    int(x0 + 18),
+                    int(y0 + 18),
+                ),
+                f"{day:02d}",
+                fill="#242638",
+                font=date_font,
+            )
+
+            # Shift pills
+            pill_y = y0 + 80
+
+            for shift in shift_order:
+
+                is_checked = shift in shifts
+
+                text_label = (
+                    f"✓ {shift_short[shift]}"
+                    if is_checked
+                    else f"– {shift_short[shift]}"
+                )
+
+                fill = (
+                    shift_fill[shift]
+                    if is_checked
+                    else "#f1f2f5"
+                )
+
+                outline = (
+                    "#aeb4c2"
+                    if is_checked
+                    else "#d9dbe2"
+                )
+
+                pill_h = 46
+
+                draw.rounded_rectangle(
+                    (
+                        int(x0 + 17),
+                        int(pill_y),
+                        int(x1 - 17),
+                        int(pill_y + pill_h),
+                    ),
+                    radius=16,
+                    fill=fill,
+                    outline=outline,
+                    width=2,
+                )
+
+                bb = draw.textbbox(
+                    (0, 0),
+                    text_label,
+                    font=shift_font,
+                )
+
+                draw.text(
+                    (
+                        (x0 + x1 - (bb[2] - bb[0])) / 2,
+                        pill_y + 6,
+                    ),
+                    text_label,
+                    fill="#303343",
+                    font=shift_font,
+                )
+
+                pill_y += 55
+
+            daily_hours = sum(
+                hour_map[s]
+                for s in shifts
+            )
+
+            if daily_hours > 0:
+
+                hour_label = (
+                    f"⏱ {daily_hours:g} giờ"
+                )
+
+                bb = draw.textbbox(
+                    (0, 0),
+                    hour_label,
+                    font=normal_font,
+                )
+
+                draw.text(
+                    (
+                        (x0 + x1 - (bb[2] - bb[0])) / 2,
+                        y1 - 45,
+                    ),
+                    hour_label,
+                    fill="#333649",
+                    font=normal_font,
+                )
+
+    # ---- Summary ----
+    summary_y = cal_top + weekday_h + rows * cell_h + 48
+
+    draw.rounded_rectangle(
+        (
+            margin_x,
+            summary_y,
+            W - margin_x,
+            summary_y + 105,
+        ),
+        radius=22,
+        fill="#f1f2f7",
+        outline="#d3d6df",
+        width=2,
     )
 
-    # Summary
-    summary_y = bottom + 42
-    svg.append(
-        f'<text x="25" y="{summary_y}" font-family="Arial, sans-serif" '
-        f'font-size="13" font-weight="700">'
-        f'Ngày làm: {working_days}   ·   '
-        f'Tổng ca: {total_shifts}   ·   '
-        f'Tổng giờ: {total_hours:g}   ·   '
-        f'Tiền công: {total_money:,.0f} VNĐ'
-        f'</text>'
+    summary_text = (
+        f"Ngày làm: {working_days}    •    "
+        f"Tổng ca: {total_shifts}    •    "
+        f"Tổng giờ: {total_hours:g}    •    "
+        f"Tiền công: {total_money:,.0f} VNĐ"
     )
 
-    svg.append(
-        f'<text x="25" y="{summary_y + 25}" font-family="Arial, sans-serif" '
-        f'font-size="10" fill="#777">'
-        f'Ảnh được tạo từ dữ liệu chấm công của tài khoản {esc(user["username"])}.'
-        f'</text>'
+    draw.text(
+        (
+            margin_x + 35,
+            summary_y + 30,
+        ),
+        summary_text,
+        fill="#2b2e3f",
+        font=summary_font,
     )
 
-    svg.append('</svg>')
-    return ''.join(svg).encode("utf-8")
+    # ---- Footer ----
+    footer = (
+        f"Xuất từ tài khoản {user['username']} • "
+        f"Dữ liệu tháng {month:02d}/{year}"
+    )
+
+    draw.text(
+        (
+            margin_x,
+            summary_y + 135,
+        ),
+        footer,
+        fill="#8a8d99",
+        font=footer_font,
+    )
+
+    output = io.BytesIO()
+
+    img.save(
+        output,
+        format="PNG",
+        optimize=True,
+    )
+
+    output.seek(0)
+
+    return output.getvalue()
 
 
 with c2:
+
     st.download_button(
-        "🖼️ Xuất HÌNH ẢNH bảng công",
-        build_attendance_svg(),
-        f"bang_cong_{user['username']}_{year}_{month:02d}.svg",
-        "image/svg+xml",
+        "🖼️ Xuất HÌNH ẢNH A4",
+        make_a4_calendar_png(),
+        f"bang_cong_{user['username']}_{year}_{month:02d}_A4.png",
+        "image/png",
         use_container_width=True,
     )
+
 
 # ============================================================
 # ADMIN
 # ============================================================
+
 
 if user["role"] == "admin":
 
@@ -1485,9 +1709,7 @@ if user["role"] == "admin":
             if employee["active"]
         ]
 
-        # Bảng Admin: cột đầu tiên là TÊN ĐĂNG NHẬP,
-        # đúng với cách bé muốn nhận diện từng tài khoản.
-        table_rows = []
+        admin_rows = []
 
         for employee in users:
 
@@ -1521,90 +1743,130 @@ if user["role"] == "admin":
                 * float(settings["salary"])
             )
 
-            table_rows.append([
-                employee["username"],
-                employee_days,
-                employee_shifts,
-                employee_hours,
-                employee_money,
-            ])
+            admin_rows.append({
+                "Tên đăng nhập": employee["username"],
+                "Họ tên": employee["full_name"],
+                "Ngày làm": employee_days,
+                "Tổng ca": employee_shifts,
+                "Tổng giờ": employee_hours,
+                "Tiền công": employee_money,
+            })
 
-        # Dùng DataFrame với đúng 5 tên cột.
-        admin_df = pd.DataFrame(
-            table_rows,
-            columns=[
-                "Tên đăng nhập",
-                "Ngày làm",
-                "Tổng ca",
-                "Tổng giờ",
-                "Tiền công",
-            ],
+        # Dữ liệu được đưa vào dataframe dạng dict để không bị lệch cột.
+        try:
+            import pandas as pd
+
+            admin_df = pd.DataFrame(admin_rows)
+
+            st.dataframe(
+                admin_df,
+                column_config={
+                    "Tên đăng nhập": st.column_config.TextColumn(
+                        "Tên đăng nhập"
+                    ),
+                    "Họ tên": st.column_config.TextColumn(
+                        "Họ tên"
+                    ),
+                    "Ngày làm": st.column_config.NumberColumn(
+                        "Ngày làm",
+                        format="%d"
+                    ),
+                    "Tổng ca": st.column_config.NumberColumn(
+                        "Tổng ca",
+                        format="%d"
+                    ),
+                    "Tổng giờ": st.column_config.NumberColumn(
+                        "Tổng giờ",
+                        format="%.1f"
+                    ),
+                    "Tiền công": st.column_config.NumberColumn(
+                        "Tiền công",
+                        format="%.0f đ"
+                    ),
+                },
+                hide_index=True,
+                use_container_width=True,
+            )
+
+        except ImportError:
+            st.table(admin_rows)
+
+        grand_days = sum(
+            row["Ngày làm"]
+            for row in admin_rows
         )
 
-        st.dataframe(
-            admin_df,
-            column_config={
-                "Tên đăng nhập": st.column_config.TextColumn(
-                    "Tên đăng nhập"
-                ),
-                "Ngày làm": st.column_config.NumberColumn(
-                    "Ngày làm",
-                    format="%d"
-                ),
-                "Tổng ca": st.column_config.NumberColumn(
-                    "Tổng ca",
-                    format="%d"
-                ),
-                "Tổng giờ": st.column_config.NumberColumn(
-                    "Tổng giờ",
-                    format="%.1f"
-                ),
-                "Tiền công": st.column_config.NumberColumn(
-                    "Tiền công",
-                    format="%.0f đ"
-                ),
-            },
-            hide_index=True,
-            use_container_width=True,
+        grand_shifts = sum(
+            row["Tổng ca"]
+            for row in admin_rows
         )
 
-        # Tổng toàn bộ nhân viên
-        grand_days = sum(row[1] for row in table_rows)
-        grand_shifts = sum(row[2] for row in table_rows)
-        grand_hours = sum(row[3] for row in table_rows)
-        grand_money = sum(row[4] for row in table_rows)
+        grand_hours = sum(
+            row["Tổng giờ"]
+            for row in admin_rows
+        )
+
+        grand_money = sum(
+            row["Tiền công"]
+            for row in admin_rows
+        )
 
         st.write("")
+
         g1, g2, g3, g4 = st.columns(4)
 
         with g1:
-            st.metric("📅 Tổng ngày", grand_days)
+            st.metric(
+                "📅 Tổng ngày",
+                grand_days
+            )
 
         with g2:
-            st.metric("🎫 Tổng ca", grand_shifts)
+            st.metric(
+                "🎫 Tổng ca",
+                grand_shifts
+            )
 
         with g3:
-            st.metric("⏱️ Tổng giờ", f"{grand_hours:g}")
+            st.metric(
+                "⏱️ Tổng giờ",
+                f"{grand_hours:g}"
+            )
 
         with g4:
-            st.metric("💰 Tổng tiền", f"{grand_money:,.0f} đ")
+            st.metric(
+                "💰 Tổng tiền",
+                f"{grand_money:,.0f} đ"
+            )
 
-        # Xuất đúng bảng Admin theo tên đăng nhập.
-        output = io.StringIO()
-        csv.writer(output).writerow([
+        # Xuất CSV bảng công Admin.
+        admin_csv = io.StringIO()
+
+        writer = csv.writer(admin_csv)
+
+        writer.writerow([
             "Tên đăng nhập",
+            "Họ tên",
             "Ngày làm",
             "Tổng ca",
             "Tổng giờ",
             "Tiền công",
         ])
 
-        csv.writer(output).writerows(table_rows)
+        for row in admin_rows:
+            writer.writerow([
+                row["Tên đăng nhập"],
+                row["Họ tên"],
+                row["Ngày làm"],
+                row["Tổng ca"],
+                row["Tổng giờ"],
+                row["Tiền công"],
+            ])
 
         st.download_button(
-            "⬇️ Xuất bảng công",
-            output.getvalue().encode("utf-8-sig"),
-            f"bang_cong_{year}_{month:02d}.csv",
+            "⬇️ Xuất bảng công toàn bộ nhân viên",
+            admin_csv.getvalue().encode("utf-8-sig"),
+            f"bang_cong_toan_bo_{year}_{month:02d}.csv",
             "text/csv",
             use_container_width=True,
         )
