@@ -6,6 +6,7 @@ import hmac
 import calendar
 import csv
 import io
+import textwrap
 from datetime import date, datetime
 from pathlib import Path
 
@@ -27,7 +28,7 @@ DB_FILE = Path("cham_cong.db")
 # MODERN UI
 # ============================================================
 
-st.markdown("""
+st.markdown(textwrap.dedent("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
@@ -149,7 +150,7 @@ div[data-testid="stButton"] button:hover {
     box-shadow: 0 7px 18px rgba(70,65,120,.13);
 }
 </style>
-""", unsafe_allow_html=True)
+"""), unsafe_allow_html=True)
 
 
 # ============================================================
@@ -490,7 +491,7 @@ ensure_default_admin()
 
 if st.session_state.current_user is None:
 
-    st.markdown("""
+    st.markdown(textwrap.dedent("""
     <div class="login-box" style="max-width: 900px; margin-top: 5vh;">
 
         <div style="
@@ -506,7 +507,7 @@ if st.session_state.current_user is None:
         </div>
 
     </div>
-    """, unsafe_allow_html=True)
+    """), unsafe_allow_html=True)
 
     with st.container(border=True):
 
@@ -614,8 +615,7 @@ month = st.session_state.month
 # HEADER
 # ============================================================
 
-st.markdown(
-    f"""
+st.markdown(textwrap.dedent(f"""
     <div class="hero">
 
         <div class="hero-title">
@@ -628,9 +628,7 @@ st.markdown(
         </div>
 
     </div>
-    """,
-    unsafe_allow_html=True
-)
+    """), unsafe_allow_html=True)
 
 
 # ============================================================
@@ -717,8 +715,7 @@ for col, icon, number, label in [
 
     with col:
 
-        st.markdown(
-            f"""
+        st.markdown(textwrap.dedent(f"""
             <div class="stat-card">
 
                 <div class="stat-icon">
@@ -734,9 +731,7 @@ for col, icon, number, label in [
                 </div>
 
             </div>
-            """,
-            unsafe_allow_html=True
-        )
+            """), unsafe_allow_html=True)
 
 
 st.write("")
@@ -776,17 +771,14 @@ with left:
 
 with center:
 
-    st.markdown(
-        f"""
+    st.markdown(textwrap.dedent(f"""
         <h2 style="
             text-align:center;
             margin:0;
         ">
             📅 {month:02d}/{year}
         </h2>
-        """,
-        unsafe_allow_html=True
-    )
+        """), unsafe_allow_html=True)
 
 
 with right:
@@ -839,14 +831,11 @@ for i, weekday in enumerate(weekdays):
 
     with headers[i]:
 
-        st.markdown(
-            f"""
+        st.markdown(textwrap.dedent(f"""
             <div class="week-title">
                 {weekday}
             </div>
-            """,
-            unsafe_allow_html=True
-        )
+            """), unsafe_allow_html=True)
 
 
 icons = {
@@ -911,15 +900,12 @@ for week in calendar.monthcalendar(
             )
 
 
-            st.markdown(
-                f"""
+            st.markdown(textwrap.dedent(f"""
                 <div class="day-title">
                     {day:02d}
                     {" • HÔM NAY" if is_today else ""}
                 </div>
-                """,
-                unsafe_allow_html=True
-            )
+                """), unsafe_allow_html=True)
 
 
             # =============================================
@@ -1006,25 +992,19 @@ for week in calendar.monthcalendar(
 
             if daily_hours:
 
-                st.markdown(
-                    f"""
+                st.markdown(textwrap.dedent(f"""
                     <div class="day-total">
                         ⏱️ {daily_hours:g} giờ
                     </div>
-                    """,
-                    unsafe_allow_html=True
-                )
+                    """), unsafe_allow_html=True)
 
             else:
 
-                st.markdown(
-                    """
+                st.markdown(textwrap.dedent("""
                     <div class="day-empty">
                         Chưa chấm
                     </div>
-                    """,
-                    unsafe_allow_html=True
-                )
+                    """), unsafe_allow_html=True)
 
 
 # ============================================================
@@ -1708,11 +1688,8 @@ if user["role"] == "admin":
 # FOOTER
 # ============================================================
 
-st.markdown(
-    """
+st.markdown(textwrap.dedent("""
     <div class="footer">
         WorkTime • SQLite • Multi-user • Audit-ready
     </div>
-    """,
-    unsafe_allow_html=True
-)
+    """), unsafe_allow_html=True)
