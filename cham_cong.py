@@ -465,7 +465,7 @@ def ensure_default_admin():
     ).fetchone()[0]
 
     if count == 0:
-        salt, password_hash = make_password("admin123")
+        salt, password_hash = make_password("1")
 
         conn.execute("""
             INSERT INTO user_accounts
@@ -474,7 +474,7 @@ def ensure_default_admin():
              role, active)
             VALUES (?, ?, ?, ?, 'admin', 1)
         """, (
-            "admin",
+            "Lâu",
             "Quản trị viên",
             password_hash,
             salt
