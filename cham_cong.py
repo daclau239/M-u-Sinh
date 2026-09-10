@@ -8,7 +8,6 @@ import csv
 import io
 from datetime import date, datetime
 from pathlib import Path
-import matplotlib.pyplot as plt
 
 # ============================================================
 # CỘT SỐNG MUU SINH — CHẤM CÔNG
@@ -925,30 +924,26 @@ st.divider()
 st.subheader("📥 Xuất bảng công của tôi")
 
 st.caption(
-    f"Xuất bảng công riêng của **{user['full_name']}** "
-    f"trong tháng {month:02d}/{year}."
+    f"Bảng công riêng của {user['username']} · "
+    f"Tháng {month:02d}/{year}"
 )
-
-# ------------------------- CSV cá nhân ----------------------
 
 personal_rows = [[
     "Ngày",
-    "Ca sáng",
-    "Ca chiều",
-    "Ca tối",
-    "Tổng ca",
+    "Sáng",
+    "Chiều",
+    "Tối",
+    "Số ca",
     "Tổng giờ",
-    "Tiền công",
+    "Tiền công"
 ]]
 
 for day in range(
     1,
-    calendar.monthrange(year, month)[1] + 1,
+    calendar.monthrange(year, month)[1] + 1
 ):
     work_date = (
-        f"{year}-"
-        f"{month:02d}-"
-        f"{day:02d}"
+        f"{year}-{month:02d}-{day:02d}"
     )
 
     shifts = get_day_shifts(
@@ -961,15 +956,32 @@ for day in range(
     )
 
     personal_rows.append([
-        work_date,
-        "Có" if "Ca sáng" in shifts else "",
-        "Có" if "Ca chiều" in shifts else "",
-        "Có" if "Ca tối" in shifts else "",
-        len(shifts),
-        daily_hours,
-        daily_hours * float(settings["salary"]),
+        f"{day:02d}/{month:02d}/{year}",
+        "✓" if "Ca sáng" in shifts else "",
+        "✓" if "Ca chiều" in shifts else "",
+        "✓" if "Ca tối" in shifts else "",
+        str(len(shifts)),
+        f"{daily_hours:g}",
+        f"{daily_hours * float(settings['salary']):,.0f}"
     ])
 
+# Hiện bảng ngay trên app.
+st.dataframe(
+    personal_rows[1:],
+    column_config={
+        "Ngày": "Ngày",
+        "Sáng": "🌅 Sáng",
+        "Chiều": "🌇 Chiều",
+        "Tối": "🌙 Tối",
+        "Số ca": st.column_config.NumberColumn("Số ca"),
+        "Tổng giờ": st.column_config.TextColumn("Tổng giờ"),
+        "Tiền công": st.column_config.TextColumn("Tiền công"),
+    },
+    hide_index=True,
+    use_container_width=True,
+)
+
+# CSV
 csv_buffer = io.StringIO()
 csv.writer(csv_buffer).writerows(personal_rows)
 
@@ -977,207 +989,173 @@ c1, c2 = st.columns(2)
 
 with c1:
     st.download_button(
-        "⬇️ Tải bảng công CSV",
+        "⬇️ Tải CSV",
         csv_buffer.getvalue().encode("utf-8-sig"),
-        f"bang_cong_ca_nhan_{year}_{month:02d}.csv",
+        f"bang_cong_{user['username']}_{year}_{month:02d}.csv",
         "text/csv",
         use_container_width=True,
     )
 
 
-# -------------------------- PNG cá nhân ---------------------
-
-def build_personal_attendance_png():
-    # Chỉ đưa các ngày có chấm công vào ảnh để bảng gọn và dễ đối chiếu.
-    rows = []
-
-    for day in range(
-        1,
-        calendar.monthrange(year, month)[1] + 1,
-    ):
-        work_date = (
-            f"{year}-"
-            f"{month:02d}-"
-            f"{day:02d}"
-        )
-
-        shifts = get_day_shifts(
-            attendance.get(work_date)
-        )
-
-        if not shifts:
-            continue
-
-        daily_hours = sum(
-            hour_map[shift]
-            for shift in shifts
-        )
-
-        rows.append([
-            f"{day:02d}/{month:02d}",
-            "✓" if "Ca sáng" in shifts else "",
-            "✓" if "Ca chiều" in shifts else "",
-            "✓" if "Ca tối" in shifts else "",
-            str(len(shifts)),
-            f"{daily_hours:g}",
-            f"{daily_hours * float(settings['salary']):,.0f}",
-        ])
-
-    # Nếu tháng chưa có ngày nào chấm, vẫn tạo ảnh xác nhận.
-    if not rows:
-        rows = [["—", "", "", "", "0", "0", "0"]]
-
-    fig_height = max(4.5, 1.65 + len(rows) * 0.42)
-
-    fig, ax = plt.subplots(
-        figsize=(12, fig_height),
-        dpi=180,
-    )
-
-    ax.axis("off")
-
-    ax.text(
-        0.5,
-        0.97,
-        "CỘT SỐNG MUU SINH",
-        ha="center",
-        va="top",
-        fontsize=22,
-        fontweight="bold",
-        transform=ax.transAxes,
-    )
-
-    ax.text(
-        0.5,
-        0.91,
-        f"BẢNG CHẤM CÔNG CÁ NHÂN • THÁNG {month:02d}/{year}",
-        ha="center",
-        va="top",
-        fontsize=13,
-        fontweight="bold",
-        transform=ax.transAxes,
-    )
-
-    ax.text(
-        0.5,
-        0.865,
-        (
-            f"Nhân viên: {user['full_name']}   •   "
-            f"Username: {user['username']}"
-        ),
-        ha="center",
-        va="top",
-        fontsize=10.5,
-        transform=ax.transAxes,
-    )
-
-    columns = [
-        "Ngày",
-        "Sáng",
-        "Chiều",
-        "Tối",
-        "Số ca",
-        "Giờ",
-        "Tiền công (VNĐ)",
+# SVG IMAGE — không cần matplotlib/pandas, chạy ổn trên Streamlit Cloud.
+def build_attendance_svg():
+    visible_rows = [
+        row for row in personal_rows[1:]
+        if any(row[1:4])
     ]
 
-    table = ax.table(
-        cellText=rows,
-        colLabels=columns,
-        cellLoc="center",
-        colLoc="center",
-        bbox=[0.03, 0.16, 0.94, 0.64],
-        colWidths=[
-            0.12,
-            0.10,
-            0.10,
-            0.10,
-            0.10,
-            0.11,
-            0.27,
-        ],
+    if not visible_rows:
+        visible_rows = [[
+            "Chưa chấm công",
+            "",
+            "",
+            "",
+            "0",
+            "0",
+            "0"
+        ]]
+
+    row_h = 32
+    header_h = 42
+    title_h = 110
+    footer_h = 80
+    width = 1100
+    height = title_h + header_h + row_h * len(visible_rows) + footer_h
+
+    headers = [
+        ("Ngày", 150),
+        ("Sáng", 105),
+        ("Chiều", 105),
+        ("Tối", 105),
+        ("Số ca", 100),
+        ("Tổng giờ", 120),
+        ("Tiền công (VNĐ)", 210),
+    ]
+
+    # XML escape
+    def esc(value):
+        return (
+            str(value)
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+        )
+
+    x_positions = [0]
+    for _, col_w in headers:
+        x_positions.append(x_positions[-1] + col_w)
+
+    svg = []
+    svg.append(
+        f'<svg xmlns="http://www.w3.org/2000/svg" '
+        f'width="{width}" height="{height}" viewBox="0 0 {width} {height}">'
+    )
+    svg.append(
+        '<rect width="100%" height="100%" fill="white"/>'
     )
 
-    table.auto_set_font_size(False)
-    table.set_fontsize(9.5)
-
-    for (row_idx, col_idx), cell in table.get_celld().items():
-        cell.set_edgecolor("#C7CBD6")
-        cell.set_linewidth(0.65)
-
-        if row_idx == 0:
-            cell.set_text_props(weight="bold")
-            cell.set_height(0.06)
-
-    # Tổng tháng ở cuối ảnh.
-    ax.text(
-        0.03,
-        0.105,
-        f"Ngày làm: {working_days}",
-        fontsize=10.5,
-        fontweight="bold",
-        transform=ax.transAxes,
+    # Title
+    svg.append(
+        f'<text x="{width/2}" y="34" text-anchor="middle" '
+        f'font-family="Arial, sans-serif" font-size="26" font-weight="700">'
+        f'CỘT SỐNG MUU SINH</text>'
+    )
+    svg.append(
+        f'<text x="{width/2}" y="63" text-anchor="middle" '
+        f'font-family="Arial, sans-serif" font-size="17" font-weight="700">'
+        f'BẢNG CHẤM CÔNG CÁ NHÂN · THÁNG {month:02d}/{year}</text>'
+    )
+    svg.append(
+        f'<text x="{width/2}" y="88" text-anchor="middle" '
+        f'font-family="Arial, sans-serif" font-size="14">'
+        f'Nhân viên: {esc(user["username"])}</text>'
     )
 
-    ax.text(
-        0.28,
-        0.105,
-        f"Tổng ca: {total_shifts}",
-        fontsize=10.5,
-        fontweight="bold",
-        transform=ax.transAxes,
+    table_y = title_h
+
+    # Header background
+    svg.append(
+        f'<rect x="0" y="{table_y}" width="{width}" height="{header_h}" fill="#eceef3"/>'
     )
 
-    ax.text(
-        0.51,
-        0.105,
-        f"Tổng giờ: {total_hours:g}",
-        fontsize=10.5,
-        fontweight="bold",
-        transform=ax.transAxes,
+    # Vertical lines/header text
+    for idx, (name, col_w) in enumerate(headers):
+        x = x_positions[idx]
+        svg.append(
+            f'<line x1="{x}" y1="{table_y}" x2="{x}" '
+            f'y2="{table_y + header_h + row_h*len(visible_rows)}" '
+            f'stroke="#c7cad4" stroke-width="1"/>'
+        )
+        svg.append(
+            f'<text x="{x + col_w/2}" y="{table_y + 27}" '
+            f'text-anchor="middle" font-family="Arial, sans-serif" '
+            f'font-size="13" font-weight="700">{esc(name)}</text>'
+        )
+
+    # Rows
+    for r_idx, row in enumerate(visible_rows):
+        y0 = table_y + header_h + r_idx * row_h
+
+        if r_idx % 2 == 1:
+            svg.append(
+                f'<rect x="0" y="{y0}" width="{width}" height="{row_h}" fill="#fafbfc"/>'
+            )
+
+        svg.append(
+            f'<line x1="0" y1="{y0}" x2="{width}" y2="{y0}" '
+            f'stroke="#dfe2e8" stroke-width="1"/>'
+        )
+
+        for c_idx, value in enumerate(row):
+            x = x_positions[c_idx]
+            col_w = headers[c_idx][1]
+            svg.append(
+                f'<text x="{x + col_w/2}" y="{y0 + 21}" '
+                f'text-anchor="middle" font-family="Arial, sans-serif" '
+                f'font-size="12">{esc(value)}</text>'
+            )
+
+    bottom = table_y + header_h + row_h * len(visible_rows)
+
+    svg.append(
+        f'<line x1="0" y1="{bottom}" x2="{width}" y2="{bottom}" '
+        f'stroke="#c7cad4" stroke-width="1"/>'
+    )
+    svg.append(
+        f'<line x1="{width}" y1="{table_y}" x2="{width}" y2="{bottom}" '
+        f'stroke="#c7cad4" stroke-width="1"/>'
     )
 
-    ax.text(
-        0.75,
-        0.105,
-        f"Tiền công: {total_money:,.0f} VNĐ",
-        fontsize=10.5,
-        fontweight="bold",
-        transform=ax.transAxes,
+    # Summary
+    summary_y = bottom + 42
+    svg.append(
+        f'<text x="25" y="{summary_y}" font-family="Arial, sans-serif" '
+        f'font-size="13" font-weight="700">'
+        f'Ngày làm: {working_days}   ·   '
+        f'Tổng ca: {total_shifts}   ·   '
+        f'Tổng giờ: {total_hours:g}   ·   '
+        f'Tiền công: {total_money:,.0f} VNĐ'
+        f'</text>'
     )
 
-    ax.text(
-        0.03,
-        0.055,
-        (
-            "Ảnh đối chiếu được tạo trực tiếp từ dữ liệu chấm công "
-            "của tài khoản hiện tại."
-        ),
-        fontsize=8.5,
-        transform=ax.transAxes,
+    svg.append(
+        f'<text x="25" y="{summary_y + 25}" font-family="Arial, sans-serif" '
+        f'font-size="10" fill="#777">'
+        f'Ảnh được tạo từ dữ liệu chấm công của tài khoản {esc(user["username"])}.'
+        f'</text>'
     )
 
-    output = io.BytesIO()
-
-    fig.savefig(
-        output,
-        format="png",
-        bbox_inches="tight",
-        facecolor="white",
-    )
-
-    plt.close(fig)
-
-    output.seek(0)
-    return output.getvalue()
+    svg.append('</svg>')
+    return ''.join(svg).encode("utf-8")
 
 
 with c2:
     st.download_button(
         "🖼️ Xuất HÌNH ẢNH bảng công",
-        build_personal_attendance_png(),
-        f"bang_cong_ca_nhan_{year}_{month:02d}.png",
-        "image/png",
+        build_attendance_svg(),
+        f"bang_cong_{user['username']}_{year}_{month:02d}.svg",
+        "image/svg+xml",
         use_container_width=True,
     )
 
@@ -1552,8 +1530,6 @@ if user["role"] == "admin":
             ])
 
         # Dùng DataFrame với đúng 5 tên cột.
-        import pandas as pd
-
         admin_df = pd.DataFrame(
             table_rows,
             columns=[
