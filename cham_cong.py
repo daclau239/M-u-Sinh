@@ -6,13 +6,12 @@ import hmac
 import calendar
 import csv
 import io
-import textwrap
 from datetime import date, datetime
 from pathlib import Path
 
 # ============================================================
-# WORKTIME — CHẤM CÔNG NHIỀU NGƯỜI
-# SQLite • Streamlit • Modern UI • Audit log
+# CỘT SỐNG MUU SINH — CHẤM CÔNG
+# Streamlit + SQLite + Multi-user + Audit log
 # ============================================================
 
 st.set_page_config(
@@ -25,12 +24,13 @@ st.set_page_config(
 DB_FILE = Path("cham_cong.db")
 
 # ============================================================
-# MODERN UI
+# GIAO DIỆN
 # ============================================================
 
-st.markdown(textwrap.dedent("""
+st.markdown(
+    """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
 
 html, body, [class*="css"] {
     font-family: Inter, sans-serif;
@@ -38,8 +38,8 @@ html, body, [class*="css"] {
 
 .stApp {
     background:
-        radial-gradient(circle at 0% 0%, rgba(124,92,255,.13), transparent 26%),
-        radial-gradient(circle at 100% 0%, rgba(0,196,255,.10), transparent 25%),
+        radial-gradient(circle at 0% 0%, rgba(124, 92, 255, .14), transparent 28%),
+        radial-gradient(circle at 100% 0%, rgba(0, 200, 255, .10), transparent 25%),
         #f6f7fb;
 }
 
@@ -49,27 +49,27 @@ html, body, [class*="css"] {
 }
 
 .hero {
-    padding: 26px 30px;
+    padding: 28px 30px;
     border-radius: 28px;
-    color: white;
-    background: linear-gradient(135deg,#15162a,#30265e 55%,#14546b);
-    box-shadow: 0 18px 45px rgba(25,24,55,.18);
+    color: #fff;
+    background: linear-gradient(135deg, #141529, #31285e 55%, #14576b);
+    box-shadow: 0 18px 45px rgba(25, 24, 55, .18);
     margin-bottom: 22px;
 }
 
 .hero-title {
-    font-size: 35px;
-    font-weight: 800;
+    font-size: 34px;
+    font-weight: 900;
     letter-spacing: -1px;
 }
 
 .hero-sub {
-    opacity: .75;
     margin-top: 5px;
+    opacity: .76;
 }
 
 .stat-card {
-    background: rgba(255,255,255,.88);
+    background: rgba(255,255,255,.90);
     border: 1px solid rgba(255,255,255,.95);
     border-radius: 21px;
     padding: 17px 19px;
@@ -82,8 +82,8 @@ html, body, [class*="css"] {
 
 .stat-number {
     font-size: 27px;
-    font-weight: 800;
-    margin-top: 3px;
+    font-weight: 900;
+    margin-top: 2px;
 }
 
 .stat-label {
@@ -91,67 +91,70 @@ html, body, [class*="css"] {
     font-size: 13px;
 }
 
-.day-title {
-    font-size: 18px;
+.calendar-head {
+    text-align: center;
     font-weight: 800;
-    margin-bottom: 4px;
+    color: #747785;
+    padding: 7px 0;
+}
+
+.day-title {
+    text-align: center;
+    font-size: 18px;
+    font-weight: 900;
+    margin: 2px 0 6px;
 }
 
 .day-total {
     text-align: center;
-    font-weight: 800;
     font-size: 13px;
-    margin-top: 4px;
+    font-weight: 900;
+    margin-top: 6px;
 }
 
 .day-empty {
     text-align: center;
-    color: #a4a4ad;
+    color: #aaa;
     font-size: 11px;
-}
-
-.week-title {
-    text-align: center;
-    font-weight: 800;
-    color: #777;
-    padding: 6px;
-}
-
-.login-box {
-    max-width: 470px;
-    margin: 7vh auto;
+    margin-top: 6px;
 }
 
 .login-title {
     text-align: center;
-    font-size: 43px;
-    font-weight: 800;
+    font-size: clamp(42px, 6vw, 78px);
+    line-height: 1.05;
+    font-weight: 900;
+    letter-spacing: -2px;
+    color: #15162a;
+    margin: 28px 0 34px;
 }
 
-.login-sub {
+.section-title {
+    font-size: 24px;
+    font-weight: 900;
+}
+
+.footer {
     text-align: center;
-    color: #777;
-    margin-bottom: 25px;
-}
-
-.admin-title {
-    font-size: 25px;
-    font-weight: 800;
+    color: #999;
+    font-size: 12px;
+    margin-top: 30px;
 }
 
 div[data-testid="stButton"] button {
     border-radius: 12px !important;
-    font-weight: 700 !important;
+    font-weight: 800 !important;
     transition: all .18s ease !important;
 }
 
 div[data-testid="stButton"] button:hover {
     transform: translateY(-2px);
-    box-shadow: 0 7px 18px rgba(70,65,120,.13);
+    box-shadow: 0 8px 18px rgba(70,65,120,.14);
 }
 </style>
-"""), unsafe_allow_html=True)
-
+""",
+    unsafe_allow_html=True,
+)
 
 # ============================================================
 # DATABASE
@@ -161,7 +164,7 @@ def get_conn():
     conn = sqlite3.connect(
         DB_FILE,
         timeout=30,
-        check_same_thread=False
+        check_same_thread=False,
     )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
@@ -172,67 +175,71 @@ def get_conn():
 def init_db():
     conn = get_conn()
 
-    conn.executescript("""
-    CREATE TABLE IF NOT EXISTS settings (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        morning REAL NOT NULL DEFAULT 5.5,
-        afternoon REAL NOT NULL DEFAULT 5.5,
-        evening REAL NOT NULL DEFAULT 5.5,
-        salary REAL NOT NULL DEFAULT 25000
-    );
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            morning REAL NOT NULL DEFAULT 5.5,
+            afternoon REAL NOT NULL DEFAULT 5.5,
+            evening REAL NOT NULL DEFAULT 5.5,
+            salary REAL NOT NULL DEFAULT 25000
+        );
 
-    CREATE TABLE IF NOT EXISTS user_accounts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE NOT NULL,
-        full_name TEXT NOT NULL,
-        password_hash TEXT NOT NULL,
-        salt TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT 'employee'
-            CHECK(role IN ('employee','admin')),
-        active INTEGER NOT NULL DEFAULT 1,
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
+        CREATE TABLE IF NOT EXISTS user_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            full_name TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            salt TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'employee'
+                CHECK(role IN ('employee','admin')),
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
 
-    CREATE TABLE IF NOT EXISTS attendance (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        work_date TEXT NOT NULL,
-        ca_sang INTEGER NOT NULL DEFAULT 0,
-        ca_chieu INTEGER NOT NULL DEFAULT 0,
-        ca_toi INTEGER NOT NULL DEFAULT 0,
-        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(user_id, work_date),
-        FOREIGN KEY(user_id)
-            REFERENCES user_accounts(id)
-            ON DELETE CASCADE
-    );
+        CREATE TABLE IF NOT EXISTS attendance (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            work_date TEXT NOT NULL,
+            ca_sang INTEGER NOT NULL DEFAULT 0,
+            ca_chieu INTEGER NOT NULL DEFAULT 0,
+            ca_toi INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, work_date),
+            FOREIGN KEY(user_id)
+                REFERENCES user_accounts(id)
+                ON DELETE CASCADE
+        );
 
-    CREATE TABLE IF NOT EXISTS audit_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        username TEXT NOT NULL,
-        work_date TEXT NOT NULL,
-        action TEXT NOT NULL,
-        old_value TEXT NOT NULL,
-        new_value TEXT NOT NULL,
-        changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY(user_id)
-            REFERENCES user_accounts(id)
-            ON DELETE SET NULL
-    );
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            username TEXT NOT NULL,
+            work_date TEXT NOT NULL,
+            action TEXT NOT NULL,
+            old_value TEXT NOT NULL,
+            new_value TEXT NOT NULL,
+            changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(user_id)
+                REFERENCES user_accounts(id)
+                ON DELETE SET NULL
+        );
 
-    CREATE INDEX IF NOT EXISTS idx_attendance_user_date
-        ON attendance(user_id, work_date);
+        CREATE INDEX IF NOT EXISTS idx_attendance_user_date
+            ON attendance(user_id, work_date);
 
-    CREATE INDEX IF NOT EXISTS idx_audit_changed
-        ON audit_log(changed_at DESC);
-    """)
+        CREATE INDEX IF NOT EXISTS idx_audit_changed
+            ON audit_log(changed_at DESC);
+        """
+    )
 
-    conn.execute("""
+    conn.execute(
+        """
         INSERT OR IGNORE INTO settings
         (id, morning, afternoon, evening, salary)
         VALUES (1, 5.5, 5.5, 5.5, 25000)
-    """)
+        """
+    )
 
     conn.commit()
     conn.close()
@@ -240,9 +247,8 @@ def init_db():
 
 init_db()
 
-
 # ============================================================
-# PASSWORD
+# MẬT KHẨU
 # ============================================================
 
 def make_password(password, salt=None):
@@ -252,7 +258,7 @@ def make_password(password, salt=None):
         "sha256",
         password.encode("utf-8"),
         salt.encode("utf-8"),
-        180000
+        180000,
     ).hex()
 
     return salt, digest
@@ -273,19 +279,22 @@ def get_settings():
         "SELECT * FROM settings WHERE id=1"
     ).fetchone()
     conn.close()
-
     return dict(row)
 
 
 def get_user(username):
     conn = get_conn()
 
-    row = conn.execute("""
+    row = conn.execute(
+        """
         SELECT *
         FROM user_accounts
         WHERE username=?
         AND active=1
-    """, (username,)).fetchone()
+        LIMIT 1
+        """,
+        (username,),
+    ).fetchone()
 
     conn.close()
 
@@ -295,32 +304,36 @@ def get_user(username):
 def get_all_users():
     conn = get_conn()
 
-    rows = conn.execute("""
-        SELECT id, username, full_name,
-               role, active, created_at
+    rows = conn.execute(
+        """
+        SELECT id, username, full_name, role, active, created_at
         FROM user_accounts
         ORDER BY full_name COLLATE NOCASE
-    """).fetchall()
+        """
+    ).fetchall()
 
     conn.close()
 
-    return [dict(x) for x in rows]
+    return [dict(row) for row in rows]
 
 
-def attendance_for_month(user_id, year, month):
-    first = f"{year}-{month:02d}-01"
+def get_month_attendance(user_id, year, month):
+    first_day = f"{year}-{month:02d}-01"
     last_day = calendar.monthrange(year, month)[1]
-    last = f"{year}-{month:02d}-{last_day}"
+    last_date = f"{year}-{month:02d}-{last_day}"
 
     conn = get_conn()
 
-    rows = conn.execute("""
+    rows = conn.execute(
+        """
         SELECT *
         FROM attendance
         WHERE user_id=?
-        AND work_date BETWEEN ? AND ?
+          AND work_date BETWEEN ? AND ?
         ORDER BY work_date
-    """, (user_id, first, last)).fetchall()
+        """,
+        (user_id, first_day, last_date),
+    ).fetchall()
 
     conn.close()
 
@@ -334,37 +347,51 @@ def get_day_shifts(record):
     if not record:
         return []
 
-    result = []
+    shifts = []
 
     if record["ca_sang"]:
-        result.append("Ca sáng")
+        shifts.append("Ca sáng")
 
     if record["ca_chieu"]:
-        result.append("Ca chiều")
+        shifts.append("Ca chiều")
 
     if record["ca_toi"]:
-        result.append("Ca tối")
+        shifts.append("Ca tối")
 
-    return result
+    return shifts
+
+
+def calculate_hours(shifts, settings):
+    hour_map = {
+        "Ca sáng": float(settings["morning"]),
+        "Ca chiều": float(settings["afternoon"]),
+        "Ca tối": float(settings["evening"]),
+    }
+
+    return sum(hour_map.get(shift, 0) for shift in shifts)
 
 
 def shift_columns(shifts):
     return (
         1 if "Ca sáng" in shifts else 0,
         1 if "Ca chiều" in shifts else 0,
-        1 if "Ca tối" in shifts else 0
+        1 if "Ca tối" in shifts else 0,
     )
 
 
 def save_attendance(user, work_date, new_shifts):
     conn = get_conn()
 
-    old = conn.execute("""
+    old = conn.execute(
+        """
         SELECT *
         FROM attendance
         WHERE user_id=?
-        AND work_date=?
-    """, (user["id"], work_date)).fetchone()
+          AND work_date=?
+        LIMIT 1
+        """,
+        (user["id"], work_date),
+    ).fetchone()
 
     old_shifts = get_day_shifts(old)
 
@@ -377,50 +404,73 @@ def save_attendance(user, work_date, new_shifts):
 
     try:
         if old:
-            conn.execute("""
+            conn.execute(
+                """
                 UPDATE attendance
                 SET ca_sang=?,
                     ca_chieu=?,
                     ca_toi=?,
                     updated_at=?
                 WHERE user_id=?
-                AND work_date=?
-            """, (
-                sang, chieu, toi,
-                now,
-                user["id"],
-                work_date
-            ))
+                  AND work_date=?
+                """,
+                (
+                    sang,
+                    chieu,
+                    toi,
+                    now,
+                    user["id"],
+                    work_date,
+                ),
+            )
         else:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO attendance
-                (user_id, work_date,
-                 ca_sang, ca_chieu, ca_toi,
-                 updated_at)
+                (
+                    user_id,
+                    work_date,
+                    ca_sang,
+                    ca_chieu,
+                    ca_toi,
+                    updated_at
+                )
                 VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                user["id"],
-                work_date,
-                sang,
-                chieu,
-                toi,
-                now
-            ))
+                """,
+                (
+                    user["id"],
+                    work_date,
+                    sang,
+                    chieu,
+                    toi,
+                    now,
+                ),
+            )
 
-        conn.execute("""
+        conn.execute(
+            """
             INSERT INTO audit_log
-            (user_id, username, work_date,
-             action, old_value, new_value, changed_at)
+            (
+                user_id,
+                username,
+                work_date,
+                action,
+                old_value,
+                new_value,
+                changed_at
+            )
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            user["id"],
-            user["username"],
-            work_date,
-            "UPDATE_ATTENDANCE",
-            ", ".join(old_shifts) if old_shifts else "Không chấm",
-            ", ".join(new_shifts) if new_shifts else "Không chấm",
-            now
-        ))
+            """,
+            (
+                user["id"],
+                user["username"],
+                work_date,
+                "UPDATE_ATTENDANCE",
+                ", ".join(old_shifts) if old_shifts else "Không chấm",
+                ", ".join(new_shifts) if new_shifts else "Không chấm",
+                now,
+            ),
+        )
 
         conn.commit()
 
@@ -431,23 +481,90 @@ def save_attendance(user, work_date, new_shifts):
 def update_settings(morning, afternoon, evening, salary):
     conn = get_conn()
 
-    conn.execute("""
+    conn.execute(
+        """
         UPDATE settings
         SET morning=?,
             afternoon=?,
             evening=?,
             salary=?
         WHERE id=1
-    """, (
-        morning,
-        afternoon,
-        evening,
-        salary
-    ))
+        """,
+        (
+            morning,
+            afternoon,
+            evening,
+            salary,
+        ),
+    )
 
     conn.commit()
     conn.close()
 
+
+# ============================================================
+# ADMIN MẶC ĐỊNH
+# ============================================================
+
+def ensure_default_admin():
+    conn = get_conn()
+
+    row = conn.execute(
+        """
+        SELECT id
+        FROM user_accounts
+        WHERE username=?
+        LIMIT 1
+        """,
+        ("Lâu",),
+    ).fetchone()
+
+    salt, password_hash = make_password("1")
+
+    if row is None:
+        conn.execute(
+            """
+            INSERT INTO user_accounts
+            (
+                username,
+                full_name,
+                password_hash,
+                salt,
+                role,
+                active
+            )
+            VALUES (?, ?, ?, ?, 'admin', 1)
+            """,
+            (
+                "Lâu",
+                "Quản trị viên",
+                password_hash,
+                salt,
+            ),
+        )
+    else:
+        # Đảm bảo tài khoản Lâu luôn đăng nhập được bằng mật khẩu 1.
+        conn.execute(
+            """
+            UPDATE user_accounts
+            SET password_hash=?,
+                salt=?,
+                role='admin',
+                active=1
+            WHERE username=?
+            """,
+            (
+                password_hash,
+                salt,
+                "Lâu",
+            ),
+        )
+
+    conn.commit()
+    conn.close()
+
+
+ensure_default_admin()
 
 # ============================================================
 # LOGIN
@@ -457,69 +574,11 @@ if "current_user" not in st.session_state:
     st.session_state.current_user = None
 
 
-# Tạo admin mặc định lần đầu
-def ensure_default_admin():
-    """
-    Tạo tài khoản Admin mặc định nếu database chưa có.
-    Nếu database cũ đã tồn tại tài khoản 'admin' từ phiên bản trước,
-    vẫn tạo thêm tài khoản 'Lâu' để bé đăng nhập bằng Lâu / 1.
-    """
-    conn = get_conn()
-
-    row = conn.execute("""
-        SELECT id
-        FROM user_accounts
-        WHERE username=?
-        LIMIT 1
-    """, ("Lâu",)).fetchone()
-
-    if row is None:
-        salt, password_hash = make_password("1")
-
-        conn.execute("""
-            INSERT INTO user_accounts
-            (username, full_name,
-             password_hash, salt,
-             role, active)
-            VALUES (?, ?, ?, ?, 'admin', 1)
-        """, (
-            "Lâu",
-            "Quản trị viên",
-            password_hash,
-            salt
-        ))
-    else:
-        # Đồng bộ đúng tài khoản Admin mà bé yêu cầu.
-        salt, password_hash = make_password("1")
-
-        conn.execute("""
-            UPDATE user_accounts
-            SET password_hash=?,
-                salt=?,
-                role='admin',
-                active=1
-            WHERE username=?
-        """, (
-            password_hash,
-            salt,
-            "Lâu"
-        ))
-
-    conn.commit()
-    conn.close()
-
-
-
-ensure_default_admin()
-
-
 if st.session_state.current_user is None:
 
     st.markdown(
-        '<div style="text-align:center; font-size:clamp(42px,6vw,78px); '
-        'font-weight:900; letter-spacing:-2px; margin:20px 0 32px; '
-        'color:#15162a;">CỘT SỐNG MUU SINH</div>',
-        unsafe_allow_html=True
+        '<div class="login-title">CỘT SỐNG MUU SINH</div>',
+        unsafe_allow_html=True,
     )
 
     with st.container(border=True):
@@ -528,20 +587,19 @@ if st.session_state.current_user is None:
 
         username = st.text_input(
             "Tên đăng nhập",
-            placeholder="Nhập tài khoản"
+            placeholder="Nhập tên đăng nhập",
         )
 
         password = st.text_input(
             "Mật khẩu",
             type="password",
             placeholder="Nhập mật khẩu",
-            autocomplete="current-password"
         )
 
         if st.button(
             "🚀 Đăng nhập",
             type="primary",
-            use_container_width=True
+            use_container_width=True,
         ):
 
             user = get_user(
@@ -553,132 +611,62 @@ if st.session_state.current_user is None:
                 and check_password(
                     password,
                     user["salt"],
-                    user["password_hash"]
+                    user["password_hash"],
                 )
             ):
-
                 st.session_state.current_user = user
                 st.rerun()
 
             else:
-
                 st.error(
-                    "Sai tài khoản hoặc mật khẩu."
+                    "Tên đăng nhập hoặc mật khẩu không đúng."
                 )
-
-    st.caption(
-        "Tài khoản quản trị lần đầu: **Lâu / 1**"
-    )
 
     st.stop()
 
 
 # ============================================================
-# CURRENT USER
+# APP CHÍNH
 # ============================================================
 
 user = st.session_state.current_user
 settings = get_settings()
 
-
-# ============================================================
-# SIDEBAR
-# ============================================================
-
-with st.sidebar:
-
-    st.markdown("## 👤 Tài khoản")
-
-    st.write(
-        f"**{user['full_name']}**"
-    )
-
-    st.caption(
-        f"@{user['username']} · "
-        f"{'Quản trị viên' if user['role']=='admin' else 'Nhân viên'}"
-    )
-
-    st.divider()
-
-    if st.button(
-        "🚪 Đăng xuất",
-        use_container_width=True
-    ):
-
-        st.session_state.current_user = None
-        st.rerun()
-
-
-# ============================================================
-# MONTH
-# ============================================================
-
 if "year" not in st.session_state:
-
-    today = date.today()
-
-    st.session_state.year = today.year
-    st.session_state.month = today.month
-
+    now_date = date.today()
+    st.session_state.year = now_date.year
+    st.session_state.month = now_date.month
 
 year = st.session_state.year
 month = st.session_state.month
 
-
-# ============================================================
-# HEADER
-# ============================================================
-
-st.markdown(textwrap.dedent(f"""
-    <div class="hero">
-
-        <div class="hero-title">
-            Xin chào, {user['full_name']} 👋
-        </div>
-
-        <div class="hero-sub">
-            Tháng {month:02d}/{year}
-            · Chấm ca trực tiếp ngay trên lịch
-        </div>
-
-    </div>
-    """), unsafe_allow_html=True)
-
-
-# ============================================================
-# PERSONAL ATTENDANCE
-# ============================================================
-
-attendance = attendance_for_month(
+attendance = get_month_attendance(
     user["id"],
     year,
-    month
+    month,
 )
 
+hour_map = {
+    "Ca sáng": float(settings["morning"]),
+    "Ca chiều": float(settings["afternoon"]),
+    "Ca tối": float(settings["evening"]),
+}
 
 working_days = sum(
-    bool(get_day_shifts(row))
+    1
     for row in attendance.values()
+    if get_day_shifts(row)
 )
-
 
 total_shifts = sum(
     len(get_day_shifts(row))
     for row in attendance.values()
 )
 
-
-# Tính giờ theo cấu hình ca
-hour_map = {
-    "Ca sáng": float(settings["morning"]),
-    "Ca chiều": float(settings["afternoon"]),
-    "Ca tối": float(settings["evening"])
-}
-
 total_hours = sum(
     sum(
-        hour_map[s]
-        for s in get_day_shifts(row)
+        hour_map[shift]
+        for shift in get_day_shifts(row)
     )
     for row in attendance.values()
 )
@@ -688,6 +676,14 @@ total_money = (
     * float(settings["salary"])
 )
 
+# ============================================================
+# HEADER
+# ============================================================
+
+st.markdown(
+    f'<div class="hero"><div class="hero-title">CỘT SỐNG MUU SINH</div><div class="hero-sub">Xin chào, {user["full_name"]} 👋 · Tháng {month:02d}/{year} · Chấm ca trực tiếp trên lịch</div></div>',
+    unsafe_allow_html=True,
+)
 
 # ============================================================
 # STATS
@@ -695,138 +691,76 @@ total_money = (
 
 c1, c2, c3, c4 = st.columns(4)
 
-for col, icon, number, label in [
+stats = [
+    (c1, "📅", working_days, "Ngày làm"),
+    (c2, "🎫", total_shifts, "Tổng ca"),
+    (c3, "⏱️", f"{total_hours:g}", "Tổng giờ"),
+    (c4, "💰", f"{total_money:,.0f} đ", "Tiền công"),
+]
 
-    (
-        c1,
-        "📅",
-        working_days,
-        "Ngày làm"
-    ),
-
-    (
-        c2,
-        "🎫",
-        total_shifts,
-        "Tổng ca"
-    ),
-
-    (
-        c3,
-        "⏱️",
-        f"{total_hours:g}",
-        "Tổng giờ"
-    ),
-
-    (
-        c4,
-        "💰",
-        f"{total_money:,.0f} đ",
-        "Tiền công"
-    )
-
-]:
-
+for col, icon, number, label in stats:
     with col:
-
-        st.markdown(textwrap.dedent(f"""
-            <div class="stat-card">
-
-                <div class="stat-icon">
-                    {icon}
-                </div>
-
-                <div class="stat-number">
-                    {number}
-                </div>
-
-                <div class="stat-label">
-                    {label}
-                </div>
-
-            </div>
-            """), unsafe_allow_html=True)
-
+        st.markdown(
+            f'<div class="stat-card"><div class="stat-icon">{icon}</div><div class="stat-number">{number}</div><div class="stat-label">{label}</div></div>',
+            unsafe_allow_html=True,
+        )
 
 st.write("")
 
-
 # ============================================================
-# MONTH NAVIGATION
+# THÁNG
 # ============================================================
 
-left, center, right = st.columns(
-    [1, 2, 1]
-)
+left, center, right = st.columns([1, 2, 1])
 
 with left:
 
     if st.button(
         "← Tháng trước",
-        use_container_width=True
+        use_container_width=True,
     ):
 
         if month == 1:
-
-            st.session_state.year = (
-                year - 1
-            )
-
+            st.session_state.year = year - 1
             st.session_state.month = 12
-
         else:
-
-            st.session_state.month = (
-                month - 1
-            )
+            st.session_state.month = month - 1
 
         st.rerun()
 
 
 with center:
 
-    st.markdown(textwrap.dedent(f"""
-        <h2 style="
-            text-align:center;
-            margin:0;
-        ">
-            📅 {month:02d}/{year}
-        </h2>
-        """), unsafe_allow_html=True)
+    st.markdown(
+        f'<h2 style="text-align:center;margin:0">📅 {month:02d}/{year}</h2>',
+        unsafe_allow_html=True,
+    )
 
 
 with right:
 
     if st.button(
         "Tháng sau →",
-        use_container_width=True
+        use_container_width=True,
     ):
 
         if month == 12:
-
-            st.session_state.year = (
-                year + 1
-            )
-
+            st.session_state.year = year + 1
             st.session_state.month = 1
-
         else:
-
-            st.session_state.month = (
-                month + 1
-            )
+            st.session_state.month = month + 1
 
         st.rerun()
 
 
 st.caption(
-    "💡 Bấm trực tiếp **S / C / T** trong từng ngày. "
-    "Nút ✓ = đã chấm. Bấm lại = bỏ chấm."
+    "💡 Chấm trực tiếp trên lịch: "
+    "**S = sáng · C = chiều · T = tối**. "
+    "Bấm lại ca đã ✓ để bỏ chấm."
 )
 
-
 # ============================================================
-# CALENDAR
+# LỊCH
 # ============================================================
 
 weekdays = [
@@ -836,64 +770,58 @@ weekdays = [
     "T5",
     "T6",
     "T7",
-    "CN"
+    "CN",
 ]
 
 headers = st.columns(7)
 
 for i, weekday in enumerate(weekdays):
-
     with headers[i]:
-
-        st.markdown(textwrap.dedent(f"""
-            <div class="week-title">
-                {weekday}
-            </div>
-            """), unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="calendar-head">{weekday}</div>',
+            unsafe_allow_html=True,
+        )
 
 
 icons = {
     "Ca sáng": "🌅",
     "Ca chiều": "🌇",
-    "Ca tối": "🌙"
+    "Ca tối": "🌙",
 }
 
 short = {
     "Ca sáng": "S",
     "Ca chiều": "C",
-    "Ca tối": "T"
+    "Ca tối": "T",
 }
 
 order = [
     "Ca sáng",
     "Ca chiều",
-    "Ca tối"
+    "Ca tối",
 ]
 
 
 for week in calendar.monthcalendar(
     year,
-    month
+    month,
 ):
 
     columns = st.columns(7)
 
-    for i, day in enumerate(week):
+    for index, day in enumerate(week):
 
-        with columns[i]:
+        with columns[index]:
 
             if day == 0:
-
                 st.write("")
                 continue
-
 
             work_date = (
                 f"{year}-"
                 f"{month:02d}-"
                 f"{day:02d}"
             )
-
 
             record = attendance.get(
                 work_date
@@ -903,126 +831,88 @@ for week in calendar.monthcalendar(
                 record
             )
 
-
             is_today = (
                 date(
                     year,
                     month,
-                    day
+                    day,
                 )
                 == date.today()
             )
 
-
-            st.markdown(textwrap.dedent(f"""
-                <div class="day-title">
-                    {day:02d}
-                    {" • HÔM NAY" if is_today else ""}
-                </div>
-                """), unsafe_allow_html=True)
-
-
-            # =============================================
-            # CHẤM CA NGAY TRÊN LỊCH
-            # =============================================
+            st.markdown(
+                f'<div class="day-title">{day:02d}{" · HÔM NAY" if is_today else ""}</div>',
+                unsafe_allow_html=True,
+            )
 
             for shift in order:
 
-                checked = (
-                    shift in current
-                )
-
+                checked = shift in current
 
                 label = (
-
                     f"✓ {icons[shift]} {short[shift]}"
-
                     if checked
-
-                    else
-
-                    f"+ {icons[shift]} {short[shift]}"
-
+                    else f"+ {icons[shift]} {short[shift]}"
                 )
 
-
                 if st.button(
-
                     label,
-
-                    key=(
-                        f"{work_date}_"
-                        f"{short[shift]}"
-                    ),
-
+                    key=f"{work_date}_{short[shift]}",
                     use_container_width=True,
-
                     type=(
                         "primary"
                         if checked
                         else "secondary"
-                    )
-
+                    ),
                 ):
 
                     new_shifts = list(
                         current
                     )
 
-
                     if shift in new_shifts:
-
                         new_shifts.remove(
                             shift
                         )
-
                     else:
-
                         new_shifts.append(
                             shift
                         )
-
 
                     new_shifts.sort(
                         key=order.index
                     )
 
-
                     save_attendance(
                         user,
                         work_date,
-                        new_shifts
+                        new_shifts,
                     )
-
 
                     st.rerun()
 
-
             daily_hours = sum(
-                hour_map[s]
-                for s in current
+                hour_map[shift]
+                for shift in current
             )
 
+            if daily_hours > 0:
 
-            if daily_hours:
-
-                st.markdown(textwrap.dedent(f"""
-                    <div class="day-total">
-                        ⏱️ {daily_hours:g} giờ
-                    </div>
-                    """), unsafe_allow_html=True)
+                st.markdown(
+                    f'<div class="day-total">⏱️ {daily_hours:g} giờ</div>',
+                    unsafe_allow_html=True,
+                )
 
             else:
 
-                st.markdown(textwrap.dedent("""
-                    <div class="day-empty">
-                        Chưa chấm
-                    </div>
-                    """), unsafe_allow_html=True)
+                st.markdown(
+                    '<div class="day-empty">Chưa chấm</div>',
+                    unsafe_allow_html=True,
+                )
 
 
 # ============================================================
-# EXPORT PERSONAL
+# XUẤT CÁ NHÂN
 # ============================================================
 
 st.divider()
@@ -1031,14 +921,13 @@ st.subheader(
     "📥 Xuất bảng công cá nhân"
 )
 
-
 rows = [[
     "Ngày",
     "Ca sáng",
     "Ca chiều",
     "Ca tối",
     "Tổng giờ",
-    "Tiền công"
+    "Tiền công",
 ]]
 
 
@@ -1046,8 +935,8 @@ for day in range(
     1,
     calendar.monthrange(
         year,
-        month
-    )[1] + 1
+        month,
+    )[1] + 1,
 ):
 
     work_date = (
@@ -1056,25 +945,22 @@ for day in range(
         f"{day:02d}"
     )
 
-
-    current = get_day_shifts(
+    shifts = get_day_shifts(
         attendance.get(work_date)
     )
 
-
     daily_hours = sum(
-        hour_map[s]
-        for s in current
+        hour_map[shift]
+        for shift in shifts
     )
-
 
     rows.append([
         work_date,
-        "Có" if "Ca sáng" in current else "",
-        "Có" if "Ca chiều" in current else "",
-        "Có" if "Ca tối" in current else "",
+        "Có" if "Ca sáng" in shifts else "",
+        "Có" if "Ca chiều" in shifts else "",
+        "Có" if "Ca tối" in shifts else "",
         daily_hours,
-        daily_hours * float(settings["salary"])
+        daily_hours * float(settings["salary"]),
     ])
 
 
@@ -1090,7 +976,7 @@ st.download_button(
     csv_buffer.getvalue().encode("utf-8-sig"),
     f"cham_cong_{year}_{month:02d}.csv",
     "text/csv",
-    use_container_width=True
+    use_container_width=True,
 )
 
 
@@ -1103,131 +989,116 @@ if user["role"] == "admin":
     st.divider()
 
     st.markdown(
-        '<div class="admin-title">👨‍💼 Trung tâm quản trị</div>',
-        unsafe_allow_html=True
+        '<div class="section-title">👨‍💼 Trung tâm quản trị</div>',
+        unsafe_allow_html=True,
     )
 
     tabs = st.tabs([
         "👥 Nhân viên",
         "📊 Bảng công",
         "🛡️ Đối chứng",
-        "⚙️ Cài đặt"
+        "⚙️ Cài đặt",
     ])
 
 
-    # ========================================================
-    # EMPLOYEES
-    # ========================================================
+    # --------------------------------------------------------
+    # NHÂN VIÊN
+    # --------------------------------------------------------
 
     with tabs[0]:
 
         st.subheader(
-            "Quản lý nhân viên"
+            "Quản lý tài khoản"
         )
 
-
         users = get_all_users()
-
 
         for employee in users:
 
             c1, c2, c3, c4 = st.columns(
-                [2.5, 2, 1, 1]
+                [2.5, 2, 1.2, 1]
             )
 
-
             with c1:
-
                 st.write(
                     f"**{employee['full_name']}**"
                 )
 
-
             with c2:
-
                 st.caption(
                     f"@{employee['username']}"
                 )
 
-
             with c3:
-
                 st.caption(
                     "👑 Admin"
                     if employee["role"] == "admin"
                     else "👤 Nhân viên"
                 )
 
-
             with c4:
-
                 st.caption(
                     "🟢 Hoạt động"
                     if employee["active"]
-                    else "🔴 Khóa"
+                    else "🔴 Đã khóa"
                 )
-
 
         st.write("")
 
-
-        # ----------------------------------------------------
-        # CREATE
-        # ----------------------------------------------------
-
         with st.expander(
-            "➕ Tạo tài khoản mới"
+            "➕ Tạo tài khoản"
         ):
 
-            nu = st.text_input(
+            new_username = st.text_input(
                 "Tên đăng nhập",
-                key="new_username"
+                key="new_username",
             )
 
-            nn = st.text_input(
+            new_fullname = st.text_input(
                 "Họ và tên",
-                key="new_fullname"
+                key="new_fullname",
             )
 
-            np = st.text_input(
+            new_password = st.text_input(
                 "Mật khẩu",
                 type="password",
-                key="new_password"
+                key="new_password",
             )
 
-            nr = st.selectbox(
+            new_role = st.selectbox(
                 "Vai trò",
                 [
                     "employee",
-                    "admin"
+                    "admin",
                 ],
-                key="new_role"
+                key="new_role",
             )
-
 
             if st.button(
                 "Tạo tài khoản",
-                type="primary"
+                type="primary",
             ):
 
                 if not (
-                    nu
-                    and nn
-                    and np
+                    new_username
+                    and new_fullname
+                    and new_password
                 ):
 
                     st.error(
                         "Vui lòng điền đủ thông tin."
                     )
 
-                elif len(np) < 6:
+                elif len(
+                    new_password
+                ) < 1:
 
                     st.error(
-                        "Mật khẩu phải có ít nhất 6 ký tự."
+                        "Mật khẩu không được để trống."
                     )
 
                 elif get_user(
-                    nu.strip()
+                    new_username.strip()
                 ):
 
                     st.error(
@@ -1237,28 +1108,34 @@ if user["role"] == "admin":
                 else:
 
                     salt, password_hash = (
-                        make_password(np)
+                        make_password(
+                            new_password
+                        )
                     )
-
 
                     conn = get_conn()
 
-                    conn.execute("""
+                    conn.execute(
+                        """
                         INSERT INTO user_accounts
-                        (username,
-                         full_name,
-                         password_hash,
-                         salt,
-                         role,
-                         active)
+                        (
+                            username,
+                            full_name,
+                            password_hash,
+                            salt,
+                            role,
+                            active
+                        )
                         VALUES (?, ?, ?, ?, ?, 1)
-                    """, (
-                        nu.strip(),
-                        nn.strip(),
-                        password_hash,
-                        salt,
-                        nr
-                    ))
+                        """,
+                        (
+                            new_username.strip(),
+                            new_fullname.strip(),
+                            password_hash,
+                            salt,
+                            new_role,
+                        ),
+                    )
 
                     conn.commit()
                     conn.close()
@@ -1270,67 +1147,64 @@ if user["role"] == "admin":
                     st.rerun()
 
 
-        # ----------------------------------------------------
-        # RESET PASSWORD
-        # ----------------------------------------------------
-
         with st.expander(
             "🔑 Đặt lại mật khẩu"
         ):
 
-            employees = [
-                x
-                for x in users
-                if x["active"]
+            active_users = [
+                employee
+                for employee in users
+                if employee["active"]
             ]
 
-
-            if employees:
+            if active_users:
 
                 selected = st.selectbox(
                     "Tài khoản",
-                    employees,
+                    active_users,
                     format_func=lambda x:
                         f"{x['full_name']} "
-                        f"(@{x['username']})"
+                        f"(@{x['username']})",
                 )
 
-
-                new_pw = st.text_input(
+                reset_password = st.text_input(
                     "Mật khẩu mới",
-                    type="password"
+                    type="password",
                 )
-
 
                 if st.button(
                     "Đổi mật khẩu"
                 ):
 
-                    if len(new_pw) < 6:
+                    if not reset_password:
 
                         st.error(
-                            "Mật khẩu tối thiểu 6 ký tự."
+                            "Mật khẩu không được để trống."
                         )
 
                     else:
 
                         salt, password_hash = (
-                            make_password(new_pw)
+                            make_password(
+                                reset_password
+                            )
                         )
-
 
                         conn = get_conn()
 
-                        conn.execute("""
+                        conn.execute(
+                            """
                             UPDATE user_accounts
                             SET salt=?,
                                 password_hash=?
                             WHERE id=?
-                        """, (
-                            salt,
-                            password_hash,
-                            selected["id"]
-                        ))
+                            """,
+                            (
+                                salt,
+                                password_hash,
+                                selected["id"],
+                            ),
+                        )
 
                         conn.commit()
                         conn.close()
@@ -1339,21 +1213,18 @@ if user["role"] == "admin":
                             "Đã đổi mật khẩu."
                         )
 
+                        st.rerun()
 
-        # ----------------------------------------------------
-        # LOCK / UNLOCK
-        # ----------------------------------------------------
 
         with st.expander(
             "🔒 Khóa / mở tài khoản"
         ):
 
             manageable = [
-                x
-                for x in users
-                if x["id"] != user["id"]
+                employee
+                for employee in users
+                if employee["id"] != user["id"]
             ]
-
 
             if manageable:
 
@@ -1363,9 +1234,8 @@ if user["role"] == "admin":
                     format_func=lambda x:
                         f"{x['full_name']} "
                         f"(@{x['username']})",
-                    key="lock_user"
+                    key="lock_user",
                 )
-
 
                 if selected["active"]:
 
@@ -1375,13 +1245,14 @@ if user["role"] == "admin":
 
                         conn = get_conn()
 
-                        conn.execute("""
+                        conn.execute(
+                            """
                             UPDATE user_accounts
                             SET active=0
                             WHERE id=?
-                        """, (
-                            selected["id"],
-                        ))
+                            """,
+                            (selected["id"],),
+                        )
 
                         conn.commit()
                         conn.close()
@@ -1400,13 +1271,14 @@ if user["role"] == "admin":
 
                         conn = get_conn()
 
-                        conn.execute("""
+                        conn.execute(
+                            """
                             UPDATE user_accounts
                             SET active=1
                             WHERE id=?
-                        """, (
-                            selected["id"],
-                        ))
+                            """,
+                            (selected["id"],),
+                        )
 
                         conn.commit()
                         conn.close()
@@ -1418,77 +1290,71 @@ if user["role"] == "admin":
                         st.rerun()
 
 
-    # ========================================================
-    # ALL STAFF ATTENDANCE
-    # ========================================================
+    # --------------------------------------------------------
+    # BẢNG CÔNG
+    # --------------------------------------------------------
 
     with tabs[1]:
 
         st.subheader(
-            f"📊 Bảng công {month:02d}/{year}"
+            f"📊 Bảng công tháng {month:02d}/{year}"
         )
 
-
         users = [
-            x
-            for x in get_all_users()
-            if x["active"]
+            employee
+            for employee in get_all_users()
+            if employee["active"]
         ]
-
 
         table = [[
             "Nhân viên",
             "Ngày làm",
             "Tổng ca",
             "Tổng giờ",
-            "Tiền công"
+            "Tiền công",
         ]]
-
 
         for employee in users:
 
-            aa = attendance_for_month(
-                employee["id"],
-                year,
-                month
+            employee_attendance = (
+                get_month_attendance(
+                    employee["id"],
+                    year,
+                    month,
+                )
             )
-
 
             employee_days = sum(
-                bool(get_day_shifts(x))
-                for x in aa.values()
+                bool(get_day_shifts(row))
+                for row in employee_attendance.values()
             )
-
 
             employee_shifts = sum(
-                len(get_day_shifts(x))
-                for x in aa.values()
+                len(get_day_shifts(row))
+                for row in employee_attendance.values()
             )
-
 
             employee_hours = sum(
                 sum(
-                    hour_map[s]
-                    for s in get_day_shifts(x)
+                    hour_map[shift]
+                    for shift
+                    in get_day_shifts(row)
                 )
-                for x in aa.values()
+                for row in employee_attendance.values()
             )
-
 
             employee_money = (
                 employee_hours
                 * float(settings["salary"])
             )
 
-
             table.append([
                 employee["full_name"],
                 employee_days,
                 employee_shifts,
                 employee_hours,
-                employee_money
+                employee_money,
             ])
-
 
         st.dataframe(
             table[1:],
@@ -1498,17 +1364,16 @@ if user["role"] == "admin":
                 2: "Tổng ca",
                 3: st.column_config.NumberColumn(
                     "Tổng giờ",
-                    format="%.1f"
+                    format="%.1f",
                 ),
                 4: st.column_config.NumberColumn(
                     "Tiền công",
-                    format="%.0f đ"
-                )
+                    format="%.0f đ",
+                ),
             },
             hide_index=True,
-            use_container_width=True
+            use_container_width=True,
         )
-
 
         output = io.StringIO()
 
@@ -1516,19 +1381,18 @@ if user["role"] == "admin":
             output
         ).writerows(table)
 
-
         st.download_button(
             "⬇️ Xuất bảng công",
             output.getvalue().encode("utf-8-sig"),
             f"bang_cong_{year}_{month:02d}.csv",
             "text/csv",
-            use_container_width=True
+            use_container_width=True,
         )
 
 
-    # ========================================================
+    # --------------------------------------------------------
     # AUDIT
-    # ========================================================
+    # --------------------------------------------------------
 
     with tabs[2]:
 
@@ -1536,10 +1400,10 @@ if user["role"] == "admin":
             "🛡️ Lịch sử đối chứng"
         )
 
-
         conn = get_conn()
 
-        logs = conn.execute("""
+        logs = conn.execute(
+            """
             SELECT
                 changed_at,
                 username,
@@ -1550,39 +1414,37 @@ if user["role"] == "admin":
             FROM audit_log
             ORDER BY id DESC
             LIMIT 500
-        """).fetchall()
+            """
+        ).fetchall()
 
         conn.close()
 
-
         if logs:
 
-            audit_table = []
+            audit_rows = []
 
             for log in logs:
 
-                audit_table.append([
+                audit_rows.append([
                     log["changed_at"],
                     log["username"],
                     log["work_date"],
                     log["old_value"],
-                    log["new_value"]
+                    log["new_value"],
                 ])
 
-
             st.dataframe(
-                audit_table,
+                audit_rows,
                 column_config={
                     0: "Thời gian",
                     1: "Tài khoản",
                     2: "Ngày",
                     3: "Trước",
-                    4: "Sau"
+                    4: "Sau",
                 },
                 hide_index=True,
-                use_container_width=True
+                use_container_width=True,
             )
-
 
             output = io.StringIO()
 
@@ -1594,17 +1456,16 @@ if user["role"] == "admin":
                     "Tài khoản",
                     "Ngày",
                     "Trước",
-                    "Sau"
+                    "Sau",
                 ]
-            ] + audit_table)
-
+            ] + audit_rows)
 
             st.download_button(
                 "⬇️ Tải nhật ký đối chứng",
                 output.getvalue().encode("utf-8-sig"),
                 "audit_log.csv",
                 "text/csv",
-                use_container_width=True
+                use_container_width=True,
             )
 
         else:
@@ -1614,19 +1475,17 @@ if user["role"] == "admin":
             )
 
 
-    # ========================================================
+    # --------------------------------------------------------
     # SETTINGS
-    # ========================================================
+    # --------------------------------------------------------
 
     with tabs[3]:
 
         st.subheader(
-            "⚙️ Cấu hình hệ thống"
+            "⚙️ Cấu hình ca & lương"
         )
 
-
         c1, c2, c3 = st.columns(3)
-
 
         with c1:
 
@@ -1637,9 +1496,8 @@ if user["role"] == "admin":
                 value=float(
                     settings["morning"]
                 ),
-                step=0.5
+                step=0.5,
             )
-
 
         with c2:
 
@@ -1650,9 +1508,8 @@ if user["role"] == "admin":
                 value=float(
                     settings["afternoon"]
                 ),
-                step=0.5
+                step=0.5,
             )
-
 
         with c3:
 
@@ -1663,9 +1520,8 @@ if user["role"] == "admin":
                 value=float(
                     settings["evening"]
                 ),
-                step=0.5
+                step=0.5,
             )
-
 
         salary = st.number_input(
             "💰 Lương mỗi giờ",
@@ -1674,21 +1530,20 @@ if user["role"] == "admin":
             value=int(
                 settings["salary"]
             ),
-            step=1000
+            step=1000,
         )
-
 
         if st.button(
             "💾 Lưu cấu hình",
             type="primary",
-            use_container_width=True
+            use_container_width=True,
         ):
 
             update_settings(
                 morning,
                 afternoon,
                 evening,
-                salary
+                salary,
             )
 
             st.success(
@@ -1702,8 +1557,7 @@ if user["role"] == "admin":
 # FOOTER
 # ============================================================
 
-st.markdown(textwrap.dedent("""
-    <div class="footer">
-        WorkTime • SQLite • Multi-user • Audit-ready
-    </div>
-    """), unsafe_allow_html=True)
+st.markdown(
+    '<div class="footer">CỘT SỐNG MUU SINH • Multi-user • SQLite • Audit-ready</div>',
+    unsafe_allow_html=True,
+)
