@@ -814,101 +814,105 @@ for week in calendar.monthcalendar(
         with columns[index]:
 
             if day == 0:
+                # Giữ khoảng trống cho các ngày ngoài tháng.
                 st.write("")
                 continue
 
-            work_date = (
-                f"{year}-"
-                f"{month:02d}-"
-                f"{day:02d}"
-            )
+            # Mỗi ngày là một ô có viền riêng.
+            with st.container(border=True):
 
-            record = attendance.get(
-                work_date
-            )
-
-            current = get_day_shifts(
-                record
-            )
-
-            is_today = (
-                date(
-                    year,
-                    month,
-                    day,
-                )
-                == date.today()
-            )
-
-            st.markdown(
-                f'<div class="day-title">{day:02d}{" · HÔM NAY" if is_today else ""}</div>',
-                unsafe_allow_html=True,
-            )
-
-            for shift in order:
-
-                checked = shift in current
-
-                label = (
-                    f"✓ {icons[shift]} {short[shift]}"
-                    if checked
-                    else f"+ {icons[shift]} {short[shift]}"
+                work_date = (
+                    f"{year}-"
+                    f"{month:02d}-"
+                    f"{day:02d}"
                 )
 
-                if st.button(
-                    label,
-                    key=f"{work_date}_{short[shift]}",
-                    use_container_width=True,
-                    type=(
-                        "primary"
+                record = attendance.get(
+                    work_date
+                )
+
+                current = get_day_shifts(
+                    record
+                )
+
+                is_today = (
+                    date(
+                        year,
+                        month,
+                        day,
+                    )
+                    == date.today()
+                )
+
+                st.markdown(
+                    f'<div class="day-title">{day:02d}{" · HÔM NAY" if is_today else ""}</div>',
+                    unsafe_allow_html=True,
+                )
+
+                for shift in order:
+
+                    checked = shift in current
+
+                    label = (
+                        f"✓ {icons[shift]} {short[shift]}"
                         if checked
-                        else "secondary"
-                    ),
-                ):
-
-                    new_shifts = list(
-                        current
+                        else f"+ {icons[shift]} {short[shift]}"
                     )
 
-                    if shift in new_shifts:
-                        new_shifts.remove(
-                            shift
+                    if st.button(
+                        label,
+                        key=f"{work_date}_{short[shift]}",
+                        use_container_width=True,
+                        type=(
+                            "primary"
+                            if checked
+                            else "secondary"
+                        ),
+                    ):
+
+                        new_shifts = list(
+                            current
                         )
-                    else:
-                        new_shifts.append(
-                            shift
+
+                        if shift in new_shifts:
+                            new_shifts.remove(
+                                shift
+                            )
+                        else:
+                            new_shifts.append(
+                                shift
+                            )
+
+                        new_shifts.sort(
+                            key=order.index
                         )
 
-                    new_shifts.sort(
-                        key=order.index
-                    )
+                        save_attendance(
+                            user,
+                            work_date,
+                            new_shifts,
+                        )
 
-                    save_attendance(
-                        user,
-                        work_date,
-                        new_shifts,
-                    )
+                        st.rerun()
 
-                    st.rerun()
-
-            daily_hours = sum(
-                hour_map[shift]
-                for shift in current
-            )
-
-            if daily_hours > 0:
-
-                st.markdown(
-                    f'<div class="day-total">⏱️ {daily_hours:g} giờ</div>',
-                    unsafe_allow_html=True,
+                daily_hours = sum(
+                    hour_map[shift]
+                    for shift in current
                 )
 
-            else:
+                if daily_hours > 0:
 
-                st.markdown(
-                    '<div class="day-empty">Chưa chấm</div>',
-                    unsafe_allow_html=True,
-                )
+                    st.markdown(
+                        f'<div class="day-total">⏱️ {daily_hours:g} giờ</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                else:
+
+                    st.markdown(
+                        '<div class="day-empty">Chưa chấm</div>',
+                        unsafe_allow_html=True,
+                    )
 
 
 # ============================================================
