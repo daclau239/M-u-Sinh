@@ -1,22 +1,17 @@
+
 import streamlit as st
 import pandas as pd
 import requests
 import hashlib
 import hmac
 import io
-from datetime import date, datetime
 import calendar
+from datetime import date, datetime
 
 # ============================================================
-# 🕘 WEB CHẤM CÔNG - SUPABASE ONLINE
-# ============================================================
-# Dữ liệu chấm công lưu trực tiếp trên Supabase Database.
-#
-# STREAMLIT SECRETS:
-# SUPABASE_URL = "https://YOUR-PROJECT.supabase.co"
-# SUPABASE_SECRET_KEY = "sb_secret_..."
-#
-# KHÔNG đặt Secret Key trong code/GitHub.
+# 🕘 WEB CHẤM CÔNG 3 CA / NGÀY
+# Sáng - Chiều - Tối
+# Dữ liệu lưu online trên Supabase
 # ============================================================
 
 st.set_page_config(
@@ -27,7 +22,7 @@ st.set_page_config(
 )
 
 # ============================================================
-# LẤY SECRETS
+# SECRETS
 # ============================================================
 try:
     SUPABASE_URL = st.secrets["SUPABASE_URL"].strip().rstrip("/")
@@ -38,92 +33,113 @@ except Exception:
 
 REST_URL = f"{SUPABASE_URL}/rest/v1" if SUPABASE_URL else ""
 
+SHIFTS = ["Sáng", "Chiều", "Tối"]
+STATUSES = ["Đi làm", "Nghỉ phép", "Nghỉ", "Đi trễ", "Về sớm", "WFH"]
+
+# ============================================================
+# SQL MIGRATION - CHẠY 1 LẦN NẾU DATABASE CŨ ĐÃ CÓ
+# ============================================================
+MIGRATION_SQL = """
+-- Giữ dữ liệu chấm công cũ và mặc định các dòng cũ là ca Sáng.
+ALTER TABLE public.attendance
+ADD COLUMN IF NOT EXISTS shift text;
+
+UPDATE public.attendance
+SET shift = 'Sáng'
+WHERE shift IS NULL OR shift = '';
+
+ALTER TABLE public.attendance
+ALTER COLUMN shift SET DEFAULT 'Sáng';
+
+ALTER TABLE public.attendance
+ALTER COLUMN shift SET NOT NULL;
+
+-- Xóa unique cũ theo username + ngày.
+ALTER TABLE public.attendance
+DROP CONSTRAINT IF EXISTS attendance_username_work_date_key;
+
+ALTER TABLE public.attendance
+DROP CONSTRAINT IF EXISTS attendance_user_date_unique;
+
+-- Mỗi người / ngày / ca chỉ có 1 bản ghi.
+ALTER TABLE public.attendance
+ADD CONSTRAINT attendance_username_work_date_shift_key
+UNIQUE (username, work_date, shift);
+
+CREATE INDEX IF NOT EXISTS attendance_shift_idx
+ON public.attendance(username, work_date, shift);
+"""
+
 # ============================================================
 # CSS
 # ============================================================
 st.markdown("""
 <style>
 .block-container {
-    padding-top: 2rem;
-    padding-bottom: 3rem;
+    padding-top: 1.5rem;
 }
 .main-title {
-    font-size: 2.15rem;
+    font-size: 2rem;
     font-weight: 800;
     margin-bottom: .2rem;
 }
 .sub-title {
     color: #6b7280;
-    margin-bottom: 1.25rem;
+    margin-bottom: 1rem;
 }
-.login-box {
-    max-width: 430px;
-    margin: 70px auto;
-    padding: 28px;
+.day-box {
     border: 1px solid #e5e7eb;
-    border-radius: 18px;
-    box-shadow: 0 8px 30px rgba(0,0,0,.08);
+    border-radius: 14px;
+    padding: 8px;
+    min-height: 96px;
 }
-.success-box {
-    padding: 14px 16px;
-    border-radius: 12px;
-    border: 1px solid #bbf7d0;
-    background: #f0fdf4;
+.shift-line {
+    font-size: 12px;
+    line-height: 1.6;
 }
 </style>
 """, unsafe_allow_html=True)
 
 # ============================================================
-# HASH
-# ============================================================
-def sha256(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-# ============================================================
 # SUPABASE REST
-# Supabase mới yêu cầu sb_secret_... đi qua apikey header,
-# KHÔNG dùng Authorization: Bearer cho secret key.
 # ============================================================
-def auth_headers():
+def headers():
     return {
         "apikey": SUPABASE_SECRET_KEY,
         "Content-Type": "application/json",
     }
 
-
 def sb_request(method, table, params=None, payload=None, prefer=None):
     if not REST_URL or not SUPABASE_SECRET_KEY:
         raise RuntimeError("Thiếu Supabase Secrets.")
 
-    headers = auth_headers()
+    h = headers()
     if prefer:
-        headers["Prefer"] = prefer
+        h["Prefer"] = prefer
 
-    response = requests.request(
-        method=method,
-        url=f"{REST_URL}/{table}",
+    r = requests.request(
+        method,
+        f"{REST_URL}/{table}",
         params=params or {},
         json=payload,
-        headers=headers,
+        headers=h,
         timeout=30,
     )
 
-    if not response.ok:
+    if not r.ok:
         raise RuntimeError(
-            f"Supabase {response.status_code}: {response.text}"
+            f"Supabase {r.status_code}: {r.text}"
         )
 
-    if not response.text:
+    if not r.text:
         return []
 
-    return response.json()
+    return r.json()
 
-
-def sb_select(table, params=None):
+def select_rows(table, params=None):
     return sb_request("GET", table, params=params)
 
-
-def sb_insert(table, payload):
+def insert_row(table, payload):
     return sb_request(
         "POST",
         table,
@@ -131,8 +147,7 @@ def sb_insert(table, payload):
         prefer="return=representation",
     )
 
-
-def sb_upsert(table, payload):
+def upsert_row(table, payload):
     return sb_request(
         "POST",
         table,
@@ -140,8 +155,7 @@ def sb_upsert(table, payload):
         prefer="resolution=merge-duplicates,return=representation",
     )
 
-
-def sb_update(table, params, payload):
+def update_rows(table, params, payload):
     return sb_request(
         "PATCH",
         table,
@@ -150,8 +164,7 @@ def sb_update(table, params, payload):
         prefer="return=representation",
     )
 
-
-def sb_delete(table, params):
+def delete_rows(table, params):
     return sb_request(
         "DELETE",
         table,
@@ -159,41 +172,38 @@ def sb_delete(table, params):
         prefer="return=minimal",
     )
 
-
-def safe_error(err):
-    msg = str(err)
+def safe_error(e):
+    text = str(e)
     if SUPABASE_SECRET_KEY:
-        msg = msg.replace(SUPABASE_SECRET_KEY, "[HIDDEN]")
-    return msg
+        text = text.replace(SUPABASE_SECRET_KEY, "[HIDDEN]")
+    return text
 
+def sha256(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 # ============================================================
 # DATA
 # ============================================================
 def get_users_df():
-    rows = sb_select(
+    return pd.DataFrame(select_rows(
         "users",
         {
-            "select": "id,username,password_hash,full_name,role,department,position,active,created_at",
+            "select": "*",
             "order": "created_at.asc",
         },
-    )
-    return pd.DataFrame(rows)
-
+    ))
 
 def get_attendance_df():
-    rows = sb_select(
+    return pd.DataFrame(select_rows(
         "attendance",
         {
-            "select": "id,username,work_date,check_in,check_out,status,note,created_at,updated_at",
-            "order": "work_date.desc",
+            "select": "*",
+            "order": "work_date.desc,shift.asc",
         },
-    )
-    return pd.DataFrame(rows)
-
+    ))
 
 def get_user(username):
-    rows = sb_select(
+    rows = select_rows(
         "users",
         {
             "select": "*",
@@ -203,41 +213,37 @@ def get_user(username):
     )
     return rows[0] if rows else None
 
-
-def get_today_attendance(username):
-    rows = sb_select(
+def get_day_shift(username, work_date, shift):
+    rows = select_rows(
         "attendance",
         {
             "select": "*",
             "username": f"eq.{username}",
-            "work_date": f"eq.{date.today().isoformat()}",
+            "work_date": f"eq.{work_date}",
+            "shift": f"eq.{shift}",
             "limit": "1",
         },
     )
     return rows[0] if rows else None
 
-
 def authenticate(username, password):
-    user = get_user(username.strip())
-    if not user:
+    u = get_user(username.strip())
+    if not u or not bool(u.get("active")):
         return None
-    if not bool(user.get("active")):
-        return None
-
-    stored_hash = str(user.get("password_hash", ""))
-    if hmac.compare_digest(stored_hash, sha256(password)):
-        return user
+    if hmac.compare_digest(
+        str(u.get("password_hash", "")),
+        sha256(password),
+    ):
+        return u
     return None
 
-
-def save_attendance(username, work_date, check_in, check_out, status, note):
-    # Unique(username, work_date) trong DB đảm bảo mỗi người
-    # chỉ có một dòng cho một ngày. UPSERT sẽ cập nhật dòng cũ.
-    return sb_upsert(
+def save_shift(username, work_date, shift, check_in, check_out, status, note):
+    return upsert_row(
         "attendance",
         {
             "username": username,
             "work_date": work_date,
+            "shift": shift,
             "check_in": check_in,
             "check_out": check_out,
             "status": status,
@@ -246,178 +252,97 @@ def save_attendance(username, work_date, check_in, check_out, status, note):
         },
     )
 
-
-def create_user(username, password, full_name, role, department, position):
-    return sb_insert(
-        "users",
-        {
-            "username": username.strip(),
-            "password_hash": sha256(password),
-            "full_name": full_name.strip(),
-            "role": role,
-            "department": department.strip(),
-            "position": position.strip(),
-            "active": True,
-        },
-    )
-
-
-def update_user(
-    user_id,
-    full_name,
-    role,
-    department,
-    position,
-    active,
-    new_password=None,
-):
-    payload = {
-        "full_name": full_name.strip(),
-        "role": role,
-        "department": department.strip(),
-        "position": position.strip(),
-        "active": bool(active),
-    }
-
-    if new_password:
-        payload["password_hash"] = sha256(new_password)
-
-    return sb_update(
-        "users",
-        {"id": f"eq.{user_id}"},
-        payload,
-    )
-
-
-def delete_attendance(username, work_date):
-    return sb_delete(
+def delete_shift(username, work_date, shift):
+    return delete_rows(
         "attendance",
         {
             "username": f"eq.{username}",
             "work_date": f"eq.{work_date}",
+            "shift": f"eq.{shift}",
         },
     )
 
+def shift_icon(record):
+    if not record:
+        return "⬜"
+    status = record.get("status", "")
+    return {
+        "Đi làm": "✅",
+        "Nghỉ phép": "🟦",
+        "Nghỉ": "❌",
+        "Đi trễ": "🟡",
+        "Về sớm": "🟠",
+        "WFH": "🔵",
+    }.get(status, "⬜")
 
-def make_month_table(username, year, month):
-    df = get_attendance_df()
+def calendar_statuses(username, year, month):
+    data = get_attendance_df()
 
-    if not df.empty:
-        df["work_date"] = (
-            df["work_date"].astype(str).str[:10]
+    result = {}
+
+    if data.empty:
+        return result
+
+    data["work_date"] = data["work_date"].astype(str).str[:10]
+
+    data = data[
+        (data["username"].astype(str) == str(username))
+        & data["work_date"].str.startswith(
+            f"{int(year):04d}-{int(month):02d}-"
         )
-        df = df[
-            (df["username"].astype(str) == str(username))
-            & (
-                df["work_date"].str.startswith(
-                    f"{int(year):04d}-{int(month):02d}-"
-                )
-            )
-        ]
+    ]
 
-    rows = []
-    total_days = calendar.monthrange(int(year), int(month))[1]
-    weekday_names = ["T2", "T3", "T4", "T5", "T6", "T7", "CN"]
+    for _, row in data.iterrows():
+        day = str(row["work_date"])
+        shift = str(row.get("shift", "Sáng"))
+        result.setdefault(day, {})
+        result[day][shift] = row.to_dict()
 
-    for d in range(1, total_days + 1):
-        dt = date(int(year), int(month), d)
-
-        match = (
-            df[df["work_date"] == dt.isoformat()]
-            if not df.empty
-            else pd.DataFrame()
-        )
-
-        if not match.empty:
-            r = match.iloc[0]
-            rows.append({
-                "Ngày": dt.strftime("%d/%m/%Y"),
-                "Thứ": weekday_names[dt.weekday()],
-                "Giờ vào": r.get("check_in", ""),
-                "Giờ ra": r.get("check_out", ""),
-                "Trạng thái": r.get("status", ""),
-                "Ghi chú": r.get("note", ""),
-            })
-        else:
-            rows.append({
-                "Ngày": dt.strftime("%d/%m/%Y"),
-                "Thứ": weekday_names[dt.weekday()],
-                "Giờ vào": "",
-                "Giờ ra": "",
-                "Trạng thái": "",
-                "Ghi chú": "",
-            })
-
-    return pd.DataFrame(rows)
-
-
-def month_records_for_admin(year, month, username=None):
-    df = get_attendance_df()
-
-    if df.empty:
-        return df
-
-    df["work_date"] = df["work_date"].astype(str).str[:10]
-
-    mask = df["work_date"].str.startswith(
-        f"{int(year):04d}-{int(month):02d}-"
-    )
-
-    if username:
-        mask &= df["username"].astype(str) == str(username)
-
-    return df[mask].copy()
-
+    return result
 
 # ============================================================
-# SECRETS CHƯA CÓ
+# SETUP PAGE
 # ============================================================
 if not SUPABASE_URL or not SUPABASE_SECRET_KEY:
-    st.markdown(
-        '<div class="main-title">🕘 WEB CHẤM CÔNG</div>',
-        unsafe_allow_html=True,
-    )
+    st.title("🕘 WEB CHẤM CÔNG 3 CA")
     st.warning("Chưa cấu hình Supabase.")
 
     st.markdown("""
-### Điền Secrets trên Streamlit Cloud
-
-Vào **Manage app → Settings → Secrets** và dán:
+### Secrets cần có trên Streamlit
 
 ```toml
 SUPABASE_URL = "https://YOUR_PROJECT.supabase.co"
 SUPABASE_SECRET_KEY = "sb_secret_..."
 ```
 
-Sau đó bấm **Save → Reboot app**.
+### SQL cần chạy trong Supabase
 
-Secret key phải nằm trong Secrets, không nằm trong file Python/GitHub.
+Nếu đây là database chấm công cũ, hãy chạy **SQL migration** bên dưới một lần.
+Các bản ghi cũ sẽ được xem là **ca Sáng**.
 """)
+
+    st.code(MIGRATION_SQL, language="sql")
     st.stop()
 
-
 # ============================================================
-# TEST DATABASE
+# TEST DB
 # ============================================================
 try:
-    sb_select(
-        "users",
+    select_rows(
+        "attendance",
         {
-            "select": "id",
+            "select": "id,shift",
             "limit": "1",
         },
     )
 except Exception as e:
-    st.error("❌ Không kết nối được database Supabase.")
+    st.error("❌ Không đọc được bảng attendance.")
     st.code(safe_error(e))
-    st.markdown("""
-Kiểm tra:
-1. `SUPABASE_URL` đúng.
-2. `SUPABASE_SECRET_KEY` đúng.
-3. Hai bảng `users` và `attendance` đã được tạo trong SQL Editor.
-""")
+    st.markdown(
+        "Nếu đây là bản app 3 ca đầu tiên, hãy chạy SQL migration "
+        "ở phần hướng dẫn bên trên trong Supabase SQL Editor."
+    )
     st.stop()
-
 
 # ============================================================
 # LOGIN
@@ -427,24 +352,14 @@ if "logged_in" not in st.session_state:
 
 if not st.session_state.logged_in:
     st.markdown(
-        '<div class="login-box">',
-        unsafe_allow_html=True,
-    )
-
-    st.markdown(
         '<div class="main-title">🕘 WEB CHẤM CÔNG</div>',
         unsafe_allow_html=True,
     )
+    st.caption("Mỗi ngày có 3 ca: Sáng · Chiều · Tối")
 
-    st.markdown(
-        '<div class="sub-title">Đăng nhập hệ thống</div>',
-        unsafe_allow_html=True,
-    )
-
-    with st.form("login_form"):
+    with st.form("login"):
         username = st.text_input("Tên đăng nhập")
         password = st.text_input("Mật khẩu", type="password")
-
         submit = st.form_submit_button(
             "🔐 ĐĂNG NHẬP",
             use_container_width=True,
@@ -453,41 +368,25 @@ if not st.session_state.logged_in:
         if submit:
             try:
                 user = authenticate(username, password)
-
                 if user:
                     st.session_state.logged_in = True
                     st.session_state.username = user["username"]
                     st.rerun()
                 else:
-                    st.error(
-                        "Sai tên đăng nhập, mật khẩu hoặc tài khoản đã bị khóa."
-                    )
+                    st.error("Sai tài khoản hoặc mật khẩu.")
             except Exception as e:
-                st.error("Lỗi khi đăng nhập.")
+                st.error("Lỗi đăng nhập.")
                 st.code(safe_error(e))
 
-    st.caption("Tài khoản mặc định: admin / admin123")
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.caption("Admin mặc định: admin / admin123")
     st.stop()
 
-
-# ============================================================
-# LOAD CURRENT USER
-# ============================================================
-try:
-    current_user = get_user(
-        st.session_state.username
-    )
-except Exception as e:
-    st.error("Không đọc được tài khoản.")
-    st.code(safe_error(e))
-    st.stop()
+current_user = get_user(st.session_state.username)
 
 if not current_user or not bool(current_user.get("active")):
     st.session_state.clear()
     st.error("Tài khoản không tồn tại hoặc đã bị khóa.")
     st.stop()
-
 
 # ============================================================
 # SIDEBAR
@@ -497,34 +396,104 @@ with st.sidebar:
     st.write(f"👤 **{current_user['full_name']}**")
     st.caption(f"Tài khoản: `{current_user['username']}`")
     st.caption(f"Vai trò: `{current_user['role']}`")
-
-    if current_user.get("department"):
-        st.caption(f"🏢 {current_user['department']}")
-    if current_user.get("position"):
-        st.caption(f"💼 {current_user['position']}")
-
     st.divider()
 
     if st.button("🚪 Đăng xuất", use_container_width=True):
         st.session_state.clear()
         st.rerun()
 
-
 # ============================================================
-# EMPLOYEE PAGE
+# CALENDAR UI
 # ============================================================
-def employee_page():
+def render_calendar(username, key_prefix):
     today = date.today()
 
-    try:
-        current = get_today_attendance(
-            current_user["username"]
-        )
-    except Exception as e:
-        st.error("Không tải được dữ liệu hôm nay.")
-        st.code(safe_error(e))
-        return
+    c1, c2 = st.columns(2)
+    year = c1.number_input(
+        "Năm",
+        2020,
+        2100,
+        today.year,
+        key=f"{key_prefix}_year",
+    )
+    month = c2.selectbox(
+        "Tháng",
+        list(range(1, 13)),
+        today.month - 1,
+        key=f"{key_prefix}_month",
+    )
 
+    data = calendar_statuses(
+        username,
+        int(year),
+        int(month),
+    )
+
+    month_cal = calendar.Calendar(firstweekday=0)
+    weeks = month_cal.monthdayscalendar(
+        int(year),
+        int(month),
+    )
+
+    st.caption(
+        "✅ Đi làm  |  🟦 Nghỉ phép  |  ❌ Nghỉ  |  "
+        "🟡 Đi trễ  |  🟠 Về sớm  |  ⬜ Chưa chấm"
+    )
+
+    weekdays = ["T2", "T3", "T4", "T5", "T6", "T7", "CN"]
+    header_cols = st.columns(7)
+
+    for i, w in enumerate(weekdays):
+        header_cols[i].markdown(
+            f"**{w}**"
+        )
+
+    for week_index, week in enumerate(weeks):
+        cols = st.columns(7)
+
+        for col_index, day in enumerate(week):
+            with cols[col_index]:
+                if day == 0:
+                    st.write("")
+                    continue
+
+                ds = f"{int(year):04d}-{int(month):02d}-{day:02d}"
+                day_data = data.get(ds, {})
+
+                s1 = shift_icon(day_data.get("Sáng"))
+                s2 = shift_icon(day_data.get("Chiều"))
+                s3 = shift_icon(day_data.get("Tối"))
+
+                label = (
+                    f"**{day}**\n\n"
+                    f"S {s1}  C {s2}  T {s3}"
+                )
+
+                if st.button(
+                    label,
+                    key=f"{key_prefix}_{ds}",
+                    use_container_width=True,
+                ):
+                    st.session_state[
+                        f"{key_prefix}_selected_date"
+                    ] = ds
+                    st.rerun()
+
+    return (
+        int(year),
+        int(month),
+        st.session_state.get(
+            f"{key_prefix}_selected_date",
+            today.isoformat()
+            if today.year == int(year) and today.month == int(month)
+            else f"{int(year):04d}-{int(month):02d}-01",
+        ),
+    )
+
+# ============================================================
+# EMPLOYEE
+# ============================================================
+def employee_page():
     st.markdown(
         f'<div class="main-title">'
         f'Xin chào, {current_user["full_name"]} 👋'
@@ -532,208 +501,250 @@ def employee_page():
         unsafe_allow_html=True,
     )
 
-    st.markdown(
-        '<div class="sub-title">'
-        'Dữ liệu được lưu trực tiếp trên database online.'
-        '</div>',
-        unsafe_allow_html=True,
+    st.caption(
+        "Bấm vào một ngày trên lịch để chấm 3 ca: Sáng · Chiều · Tối."
     )
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("📅 Hôm nay", today.strftime("%d/%m/%Y"))
-    c2.metric("🟢 Giờ vào", (current or {}).get("check_in") or "—")
-    c3.metric("🔴 Giờ ra", (current or {}).get("check_out") or "—")
+    year, month, selected_date = render_calendar(
+        current_user["username"],
+        "employee_calendar",
+    )
 
-    tab1, tab2, tab3 = st.tabs([
-        "📝 Chấm công",
-        "📅 Bảng công",
-        "📊 Xuất Excel",
-    ])
+    st.divider()
 
-    # --------------------------------------------------------
-    # CHẤM CÔNG
-    # --------------------------------------------------------
-    with tab1:
-        with st.form("attendance_form"):
-            ci_default = datetime.now().time()
-            co_default = datetime.now().time()
+    st.subheader(
+        f"📅 Chấm công ngày "
+        f"{datetime.strptime(selected_date, '%Y-%m-%d').strftime('%d/%m/%Y')}"
+    )
 
-            if current:
-                try:
-                    if current.get("check_in"):
-                        ci_default = datetime.strptime(
-                            current["check_in"],
-                            "%H:%M",
-                        ).time()
-                    if current.get("check_out"):
-                        co_default = datetime.strptime(
-                            current["check_out"],
-                            "%H:%M",
-                        ).time()
-                except Exception:
-                    pass
-
-            c1, c2 = st.columns(2)
-
-            check_in = c1.time_input(
-                "🟢 Giờ vào",
-                value=ci_default,
-            )
-            check_out = c2.time_input(
-                "🔴 Giờ ra",
-                value=co_default,
-            )
-
-            statuses = [
-                "Đi làm",
-                "Nghỉ phép",
-                "Nghỉ",
-                "Đi trễ",
-                "Về sớm",
-                "WFH",
-            ]
-
-            current_status = (
-                current.get("status")
-                if current else None
-            )
-
-            status = st.selectbox(
-                "Trạng thái",
-                statuses,
-                index=(
-                    statuses.index(current_status)
-                    if current_status in statuses
-                    else 0
-                ),
-            )
-
-            note = st.text_input(
-                "Ghi chú",
-                value=(current or {}).get("note", ""),
-            )
-
-            save = st.form_submit_button(
-                "💾 LƯU CHẤM CÔNG",
-                use_container_width=True,
-            )
-
-            if save:
-                try:
-                    save_attendance(
-                        current_user["username"],
-                        today.isoformat(),
-                        check_in.strftime("%H:%M"),
-                        check_out.strftime("%H:%M"),
-                        status,
-                        note,
-                    )
-                    st.success(
-                        "✅ Đã lưu. Dữ liệu đã được lưu trên website/database."
-                    )
-                    st.rerun()
-                except Exception as e:
-                    st.error("Không lưu được chấm công.")
-                    st.code(safe_error(e))
-
-    # --------------------------------------------------------
-    # BẢNG CÔNG
-    # --------------------------------------------------------
-    with tab2:
-        c1, c2 = st.columns(2)
-
-        year = c1.number_input(
-            "Năm",
-            min_value=2020,
-            max_value=2100,
-            value=today.year,
-            step=1,
+    # 3 ca hiển thị cùng lúc.
+    for shift in SHIFTS:
+        record = get_day_shift(
+            current_user["username"],
+            selected_date,
+            shift,
         )
 
-        month = c2.selectbox(
-            "Tháng",
-            list(range(1, 13)),
-            index=today.month - 1,
-        )
+        icon = shift_icon(record)
 
-        try:
-            table = make_month_table(
-                current_user["username"],
-                year,
-                month,
-            )
-            st.dataframe(
-                table,
-                use_container_width=True,
-                hide_index=True,
-            )
-        except Exception as e:
-            st.error("Không tải được bảng công.")
-            st.code(safe_error(e))
+        with st.expander(
+            f"{icon} CA {shift.upper()}",
+            expanded=True,
+        ):
+            with st.form(
+                f"employee_{selected_date}_{shift}"
+            ):
+                c1, c2 = st.columns(2)
 
-    # --------------------------------------------------------
-    # EXCEL
-    # --------------------------------------------------------
-    with tab3:
-        c1, c2 = st.columns(2)
+                default_in = datetime.now().time()
+                default_out = datetime.now().time()
 
-        year = c1.number_input(
-            "Năm xuất",
-            min_value=2020,
-            max_value=2100,
-            value=today.year,
-            step=1,
-            key="export_year",
-        )
+                if record:
+                    try:
+                        if record.get("check_in"):
+                            default_in = datetime.strptime(
+                                record["check_in"],
+                                "%H:%M",
+                            ).time()
+                        if record.get("check_out"):
+                            default_out = datetime.strptime(
+                                record["check_out"],
+                                "%H:%M",
+                            ).time()
+                    except Exception:
+                        pass
 
-        month = c2.selectbox(
-            "Tháng xuất",
-            list(range(1, 13)),
-            index=today.month - 1,
-            key="export_month",
-        )
-
-        try:
-            export_df = make_month_table(
-                current_user["username"],
-                year,
-                month,
-            )
-
-            output = io.BytesIO()
-
-            with pd.ExcelWriter(
-                output,
-                engine="openpyxl",
-            ) as writer:
-                export_df.to_excel(
-                    writer,
-                    index=False,
-                    sheet_name="BangCong",
+                check_in = c1.time_input(
+                    "Giờ vào",
+                    value=default_in,
+                    key=f"in_{selected_date}_{shift}",
+                )
+                check_out = c2.time_input(
+                    "Giờ ra",
+                    value=default_out,
+                    key=f"out_{selected_date}_{shift}",
                 )
 
-            output.seek(0)
+                current_status = (
+                    record.get("status")
+                    if record
+                    else None
+                )
 
-            st.download_button(
-                "⬇️ TẢI BẢNG CÔNG EXCEL",
-                output.getvalue(),
-                file_name=(
-                    f"Bang_cong_{current_user['username']}_"
-                    f"{int(month):02d}_{int(year)}.xlsx"
-                ),
-                mime=(
-                    "application/vnd.openxmlformats-officedocument."
-                    "spreadsheetml.sheet"
-                ),
-                use_container_width=True,
+                status = st.selectbox(
+                    "Trạng thái",
+                    STATUSES,
+                    index=(
+                        STATUSES.index(current_status)
+                        if current_status in STATUSES
+                        else 0
+                    ),
+                    key=f"status_{selected_date}_{shift}",
+                )
+
+                note = st.text_input(
+                    "Ghi chú",
+                    value=(record or {}).get("note", ""),
+                    key=f"note_{selected_date}_{shift}",
+                )
+
+                a, b = st.columns(2)
+
+                save = a.form_submit_button(
+                    "💾 LƯU CA",
+                    use_container_width=True,
+                )
+                delete = b.form_submit_button(
+                    "🗑️ XÓA CA",
+                    use_container_width=True,
+                )
+
+                if save:
+                    try:
+                        save_shift(
+                            current_user["username"],
+                            selected_date,
+                            shift,
+                            check_in.strftime("%H:%M"),
+                            check_out.strftime("%H:%M"),
+                            status,
+                            note,
+                        )
+                        st.success(
+                            f"✅ Đã lưu ca {shift}."
+                        )
+                        st.rerun()
+                    except Exception as e:
+                        st.error(
+                            f"Không lưu được ca {shift}."
+                        )
+                        st.code(safe_error(e))
+
+                if delete:
+                    try:
+                        delete_shift(
+                            current_user["username"],
+                            selected_date,
+                            shift,
+                        )
+                        st.success(
+                            f"🗑️ Đã xóa ca {shift}."
+                        )
+                        st.rerun()
+                    except Exception as e:
+                        st.error(
+                            f"Không xóa được ca {shift}."
+                        )
+                        st.code(safe_error(e))
+
+    # --------------------------------------------------------
+    # BẢNG CÔNG 3 CA DẠNG EXCEL
+    # --------------------------------------------------------
+    st.divider()
+    st.subheader("📊 Bảng công tháng")
+
+    try:
+        df = get_attendance_df()
+
+        if not df.empty:
+            df["work_date"] = df["work_date"].astype(str).str[:10]
+            month_df = df[
+                (df["username"].astype(str) == current_user["username"])
+                & (
+                    df["work_date"].str.startswith(
+                        f"{year:04d}-{month:02d}-"
+                    )
+                )
+            ].copy()
+        else:
+            month_df = pd.DataFrame()
+
+        show = []
+
+        total_days = calendar.monthrange(year, month)[1]
+
+        for d in range(1, total_days + 1):
+            ds = f"{year:04d}-{month:02d}-{d:02d}"
+            day_rows = (
+                month_df[month_df["work_date"] == ds]
+                if not month_df.empty
+                else pd.DataFrame()
             )
-        except Exception as e:
-            st.error("Không tạo được Excel.")
-            st.code(safe_error(e))
 
+            for shift in SHIFTS:
+                r = (
+                    day_rows[day_rows["shift"] == shift]
+                    if not day_rows.empty
+                    else pd.DataFrame()
+                )
+
+                if not r.empty:
+                    row = r.iloc[0]
+                    show.append({
+                        "Ngày": datetime.strptime(
+                            ds,
+                            "%Y-%m-%d",
+                        ).strftime("%d/%m/%Y"),
+                        "Ca": shift,
+                        "Giờ vào": row.get("check_in", ""),
+                        "Giờ ra": row.get("check_out", ""),
+                        "Trạng thái": row.get("status", ""),
+                        "Ghi chú": row.get("note", ""),
+                    })
+                else:
+                    show.append({
+                        "Ngày": datetime.strptime(
+                            ds,
+                            "%Y-%m-%d",
+                        ).strftime("%d/%m/%Y"),
+                        "Ca": shift,
+                        "Giờ vào": "",
+                        "Giờ ra": "",
+                        "Trạng thái": "",
+                        "Ghi chú": "",
+                    })
+
+        report = pd.DataFrame(show)
+        st.dataframe(
+            report,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        output = io.BytesIO()
+        with pd.ExcelWriter(
+            output,
+            engine="openpyxl",
+        ) as writer:
+            report.to_excel(
+                writer,
+                index=False,
+                sheet_name="BangCong3Ca",
+            )
+
+        output.seek(0)
+
+        st.download_button(
+            "⬇️ XUẤT EXCEL THÁNG",
+            output.getvalue(),
+            file_name=(
+                f"Bang_cong_3_ca_"
+                f"{current_user['username']}_"
+                f"{month:02d}_{year}.xlsx"
+            ),
+            mime=(
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+            use_container_width=True,
+        )
+
+    except Exception as e:
+        st.error("Không tạo được bảng công.")
+        st.code(safe_error(e))
 
 # ============================================================
-# ADMIN PAGE
+# ADMIN
 # ============================================================
 def admin_page():
     st.markdown(
@@ -741,441 +752,341 @@ def admin_page():
         unsafe_allow_html=True,
     )
 
-    st.markdown(
-        '<div class="sub-title">'
-        'Quản lý nhân viên và dữ liệu chấm công.'
-        '</div>',
-        unsafe_allow_html=True,
-    )
+    users = get_users_df()
 
-    try:
-        users = get_users_df()
-        attendance = get_attendance_df()
-    except Exception as e:
-        st.error("Không tải được dữ liệu quản trị.")
-        st.code(safe_error(e))
-        return
+    if users.empty:
+        st.info("Chưa có tài khoản.")
+    else:
+        employee_options = {
+            f"{r['full_name']} ({r['username']})":
+            r["username"]
+            for _, r in users[
+                users["role"] == "employee"
+            ].iterrows()
+        }
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("👥 Tài khoản", len(users))
-    c2.metric(
-        "🟢 Đang hoạt động",
-        int(users["active"].sum())
-        if not users.empty and "active" in users.columns
-        else 0,
-    )
-    c3.metric("📝 Lượt chấm công", len(attendance))
+        tab1, tab2, tab3 = st.tabs([
+            "👥 Nhân viên",
+            "🗓️ Lịch chấm công",
+            "📊 Báo cáo",
+        ])
 
-    tab1, tab2, tab3 = st.tabs([
-        "👥 Nhân viên",
-        "📝 Chấm công",
-        "📊 Bảng công",
-    ])
-
-    # --------------------------------------------------------
-    # USERS
-    # --------------------------------------------------------
-    with tab1:
-        if not users.empty:
+        # ----------------------------------------------------
+        # USERS
+        # ----------------------------------------------------
+        with tab1:
             display = users.copy()
             display["Trạng thái"] = display["active"].map({
                 True: "Đang hoạt động",
                 False: "Đã khóa",
             })
 
-            display = display.rename(columns={
-                "username": "Tài khoản",
-                "full_name": "Họ tên",
-                "role": "Vai trò",
-                "department": "Bộ phận",
-                "position": "Chức vụ",
-            })
-
-            cols = [
-                "Tài khoản",
-                "Họ tên",
-                "Vai trò",
-                "Bộ phận",
-                "Chức vụ",
-                "Trạng thái",
-            ]
-
             st.dataframe(
-                display[
-                    [c for c in cols if c in display.columns]
+                display.rename(columns={
+                    "username": "Tài khoản",
+                    "full_name": "Họ tên",
+                    "role": "Vai trò",
+                    "department": "Bộ phận",
+                    "position": "Chức vụ",
+                })[
+                    [
+                        "Tài khoản",
+                        "Họ tên",
+                        "Vai trò",
+                        "Bộ phận",
+                        "Chức vụ",
+                        "Trạng thái",
+                    ]
                 ],
                 use_container_width=True,
                 hide_index=True,
             )
 
-        with st.expander("➕ Tạo tài khoản"):
-            with st.form("create_user_form"):
-                c1, c2 = st.columns(2)
+            with st.expander("➕ Tạo tài khoản"):
+                with st.form("create_user"):
+                    c1, c2 = st.columns(2)
 
-                username = c1.text_input("Tên đăng nhập *")
-                full_name = c1.text_input("Họ tên *")
-                password = c1.text_input(
-                    "Mật khẩu *",
-                    type="password",
-                )
+                    username = c1.text_input("Tên đăng nhập *")
+                    full_name = c1.text_input("Họ tên *")
+                    password = c1.text_input(
+                        "Mật khẩu *",
+                        type="password",
+                    )
 
-                role = c2.selectbox(
-                    "Vai trò",
-                    ["employee", "admin"],
-                )
-                department = c2.text_input("Bộ phận")
-                position = c2.text_input("Chức vụ")
+                    role = c2.selectbox(
+                        "Vai trò",
+                        ["employee", "admin"],
+                    )
+                    department = c2.text_input("Bộ phận")
+                    position = c2.text_input("Chức vụ")
 
-                if st.form_submit_button(
-                    "➕ TẠO TÀI KHOẢN",
-                    use_container_width=True,
-                ):
-                    if not username.strip() or not full_name.strip() or not password:
-                        st.error("Vui lòng nhập đủ thông tin.")
-                    else:
-                        try:
-                            create_user(
-                                username,
-                                password,
-                                full_name,
-                                role,
-                                department,
-                                position,
-                            )
-                            st.success("✅ Đã tạo tài khoản.")
-                            st.rerun()
-                        except Exception as e:
-                            st.error("Không tạo được tài khoản.")
-                            st.code(safe_error(e))
-
-        with st.expander("✏️ Chỉnh sửa tài khoản"):
-            if users.empty:
-                st.info("Chưa có tài khoản.")
-            else:
-                usernames = users["username"].tolist()
-
-                selected_username = st.selectbox(
-                    "Chọn tài khoản",
-                    usernames,
-                    key="edit_username",
-                )
-
-                selected_user = get_user(selected_username)
-
-                if selected_user:
-                    with st.form("edit_user_form"):
-                        c1, c2 = st.columns(2)
-
-                        full_name = c1.text_input(
-                            "Họ tên",
-                            value=selected_user["full_name"],
-                        )
-                        department = c1.text_input(
-                            "Bộ phận",
-                            value=selected_user.get("department", ""),
-                        )
-                        position = c1.text_input(
-                            "Chức vụ",
-                            value=selected_user.get("position", ""),
-                        )
-
-                        roles = ["employee", "admin"]
-
-                        role = c2.selectbox(
-                            "Vai trò",
-                            roles,
-                            index=(
-                                roles.index(selected_user["role"])
-                                if selected_user["role"] in roles
-                                else 0
-                            ),
-                        )
-
-                        active = c2.checkbox(
-                            "Đang hoạt động",
-                            value=bool(selected_user["active"]),
-                        )
-
-                        new_password = c2.text_input(
-                            "Mật khẩu mới (để trống nếu không đổi)",
-                            type="password",
-                        )
-
-                        if st.form_submit_button(
-                            "💾 LƯU THAY ĐỔI",
-                            use_container_width=True,
-                        ):
-                            if (
-                                selected_user["username"]
-                                == current_user["username"]
-                                and not active
-                            ):
-                                st.error(
-                                    "Không thể tự khóa tài khoản đang đăng nhập."
+                    if st.form_submit_button(
+                        "➕ TẠO TÀI KHOẢN",
+                        use_container_width=True,
+                    ):
+                        if not username.strip() or not full_name.strip() or not password:
+                            st.error("Vui lòng nhập đủ thông tin.")
+                        else:
+                            try:
+                                insert_user(
+                                    "users",
+                                    {
+                                        "username": username.strip(),
+                                        "password_hash": sha256(password),
+                                        "full_name": full_name.strip(),
+                                        "role": role,
+                                        "department": department.strip(),
+                                        "position": position.strip(),
+                                        "active": True,
+                                    },
                                 )
-                            else:
+                                st.success("✅ Đã tạo tài khoản.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error("Không tạo được tài khoản.")
+                                st.code(safe_error(e))
+
+        # ----------------------------------------------------
+        # ADMIN CALENDAR
+        # ----------------------------------------------------
+        with tab2:
+            if not employee_options:
+                st.info("Chưa có nhân viên.")
+            else:
+                selected_label = st.selectbox(
+                    "Chọn nhân viên",
+                    list(employee_options.keys()),
+                    key="admin_calendar_employee",
+                )
+                selected_username = employee_options[selected_label]
+
+                year, month, selected_date = render_calendar(
+                    selected_username,
+                    "admin_calendar",
+                )
+
+                st.divider()
+                st.subheader(
+                    f"📅 {datetime.strptime(
+                        selected_date, '%Y-%m-%d'
+                    ).strftime('%d/%m/%Y')}"
+                )
+
+                for shift in SHIFTS:
+                    record = get_day_shift(
+                        selected_username,
+                        selected_date,
+                        shift,
+                    )
+
+                    with st.expander(
+                        f"{shift_icon(record)} CA {shift.upper()}",
+                        expanded=True,
+                    ):
+                        with st.form(
+                            f"admin_{selected_date}_{shift}"
+                        ):
+                            c1, c2 = st.columns(2)
+
+                            ci = c1.text_input(
+                                "Giờ vào",
+                                value=(record or {}).get(
+                                    "check_in", ""
+                                ),
+                            )
+                            co = c2.text_input(
+                                "Giờ ra",
+                                value=(record or {}).get(
+                                    "check_out", ""
+                                ),
+                            )
+
+                            old_status = (
+                                record.get("status")
+                                if record
+                                else None
+                            )
+
+                            status = st.selectbox(
+                                "Trạng thái",
+                                STATUSES,
+                                index=(
+                                    STATUSES.index(old_status)
+                                    if old_status in STATUSES
+                                    else 0
+                                ),
+                                key=f"adm_status_{selected_date}_{shift}",
+                            )
+
+                            note = st.text_input(
+                                "Ghi chú",
+                                value=(record or {}).get("note", ""),
+                                key=f"adm_note_{selected_date}_{shift}",
+                            )
+
+                            a, b = st.columns(2)
+
+                            save = a.form_submit_button(
+                                "💾 LƯU",
+                                use_container_width=True,
+                            )
+
+                            delete = b.form_submit_button(
+                                "🗑️ XÓA",
+                                use_container_width=True,
+                            )
+
+                            if save:
                                 try:
-                                    update_user(
-                                        selected_user["id"],
-                                        full_name,
-                                        role,
-                                        department,
-                                        position,
-                                        active,
-                                        new_password or None,
+                                    save_shift(
+                                        selected_username,
+                                        selected_date,
+                                        shift,
+                                        ci.strip(),
+                                        co.strip(),
+                                        status,
+                                        note.strip(),
                                     )
-                                    st.success("✅ Đã cập nhật.")
+                                    st.success(f"Đã lưu ca {shift}.")
                                     st.rerun()
                                 except Exception as e:
-                                    st.error("Không cập nhật được.")
+                                    st.error("Không lưu được.")
                                     st.code(safe_error(e))
 
-    # --------------------------------------------------------
-    # ADMIN ATTENDANCE
-    # --------------------------------------------------------
-    with tab2:
-        employees = (
-            users[users["role"] == "employee"].copy()
-            if not users.empty
-            else pd.DataFrame()
-        )
+                            if delete:
+                                try:
+                                    delete_shift(
+                                        selected_username,
+                                        selected_date,
+                                        shift,
+                                    )
+                                    st.success(f"Đã xóa ca {shift}.")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error("Không xóa được.")
+                                    st.code(safe_error(e))
 
-        if employees.empty:
-            st.info("Chưa có nhân viên.")
-        else:
-            options = {
-                f"{r['full_name']} ({r['username']})":
-                r["username"]
-                for _, r in employees.iterrows()
-            }
+        # ----------------------------------------------------
+        # REPORT
+        # ----------------------------------------------------
+        with tab3:
+            c1, c2 = st.columns(2)
 
-            selected_label = st.selectbox(
+            year = c1.number_input(
+                "Năm",
+                2020,
+                2100,
+                date.today().year,
+                key="report_year",
+            )
+
+            month = c2.selectbox(
+                "Tháng",
+                range(1, 13),
+                date.today().month - 1,
+                key="report_month",
+            )
+
+            employee_options_report = ["Tất cả"] + list(
+                employee_options.values()
+            )
+
+            employee = st.selectbox(
                 "Nhân viên",
-                list(options.keys()),
-                key="admin_employee_select",
-            )
-            selected_username = options[selected_label]
-
-            work_date = st.date_input(
-                "Ngày",
-                date.today(),
-                key="admin_work_date",
+                employee_options_report,
+                key="report_employee",
             )
 
-            existing = None
+            df = get_attendance_df()
 
-            if not attendance.empty:
-                temp = attendance.copy()
-                temp["work_date"] = (
-                    temp["work_date"].astype(str).str[:10]
-                )
-                match = temp[
-                    (temp["username"].astype(str) == selected_username)
-                    & (temp["work_date"] == work_date.isoformat())
-                ]
-                if not match.empty:
-                    existing = match.iloc[0].to_dict()
+            if not df.empty:
+                df["work_date"] = df["work_date"].astype(str).str[:10]
 
-            with st.form("admin_attendance_form"):
-                c1, c2 = st.columns(2)
+                report = df[
+                    df["work_date"].str.startswith(
+                        f"{int(year):04d}-{int(month):02d}-"
+                    )
+                ].copy()
 
-                check_in = c1.text_input(
-                    "Giờ vào",
-                    value=(existing or {}).get("check_in", ""),
-                )
-                check_out = c1.text_input(
-                    "Giờ ra",
-                    value=(existing or {}).get("check_out", ""),
-                )
+                if employee != "Tất cả":
+                    report = report[
+                        report["username"].astype(str) == employee
+                    ]
 
-                statuses = [
-                    "Đi làm",
-                    "Nghỉ phép",
-                    "Nghỉ",
-                    "Đi trễ",
-                    "Về sớm",
-                    "WFH",
-                ]
-
-                old_status = (
-                    existing.get("status")
-                    if existing
-                    else None
-                )
-
-                status = c2.selectbox(
-                    "Trạng thái",
-                    statuses,
-                    index=(
-                        statuses.index(old_status)
-                        if old_status in statuses
-                        else 0
-                    ),
-                )
-
-                note = c2.text_input(
-                    "Ghi chú",
-                    value=(existing or {}).get("note", ""),
-                )
-
-                a, b = st.columns(2)
-
-                save = a.form_submit_button(
-                    "💾 LƯU / SỬA",
-                    use_container_width=True,
-                )
-
-                delete = b.form_submit_button(
-                    "🗑️ XÓA",
-                    use_container_width=True,
-                )
-
-                if save:
-                    try:
-                        save_attendance(
-                            selected_username,
-                            work_date.isoformat(),
-                            check_in.strip(),
-                            check_out.strip(),
-                            status,
-                            note.strip(),
-                        )
-                        st.success("✅ Đã lưu.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error("Không lưu được.")
-                        st.code(safe_error(e))
-
-                if delete:
-                    try:
-                        delete_attendance(
-                            selected_username,
-                            work_date.isoformat(),
-                        )
-                        st.success("🗑️ Đã xóa.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error("Không xóa được.")
-                        st.code(safe_error(e))
-
-    # --------------------------------------------------------
-    # MONTHLY REPORT
-    # --------------------------------------------------------
-    with tab3:
-        c1, c2 = st.columns(2)
-
-        year = c1.number_input(
-            "Năm",
-            2020,
-            2100,
-            date.today().year,
-            key="admin_year",
-        )
-
-        month = c2.selectbox(
-            "Tháng",
-            list(range(1, 13)),
-            date.today().month - 1,
-            key="admin_month",
-        )
-
-        employee_options = ["Tất cả"]
-        if not users.empty:
-            employee_options += users[
-                users["role"] == "employee"
-            ]["username"].tolist()
-
-        employee = st.selectbox(
-            "Nhân viên",
-            employee_options,
-            key="admin_filter_employee",
-        )
-
-        try:
-            report = month_records_for_admin(
-                year,
-                month,
-                None if employee == "Tất cả" else employee,
-            )
-
-            if report.empty:
-                st.info("Tháng này chưa có dữ liệu.")
-            else:
-                if not users.empty:
+                if not report.empty:
                     report = report.merge(
                         users[
-                            ["username", "full_name", "department", "position"]
+                            [
+                                "username",
+                                "full_name",
+                                "department",
+                            ]
                         ],
                         on="username",
                         how="left",
                     )
 
-                report = report.rename(columns={
-                    "username": "Tài khoản",
-                    "full_name": "Họ tên",
-                    "department": "Bộ phận",
-                    "position": "Chức vụ",
-                    "work_date": "Ngày",
-                    "check_in": "Giờ vào",
-                    "check_out": "Giờ ra",
-                    "status": "Trạng thái",
-                    "note": "Ghi chú",
-                })
+                    report = report.rename(columns={
+                        "username": "Tài khoản",
+                        "full_name": "Họ tên",
+                        "department": "Bộ phận",
+                        "work_date": "Ngày",
+                        "shift": "Ca",
+                        "check_in": "Giờ vào",
+                        "check_out": "Giờ ra",
+                        "status": "Trạng thái",
+                        "note": "Ghi chú",
+                    })
 
-                cols = [
-                    "Tài khoản",
-                    "Họ tên",
-                    "Bộ phận",
-                    "Chức vụ",
-                    "Ngày",
-                    "Giờ vào",
-                    "Giờ ra",
-                    "Trạng thái",
-                    "Ghi chú",
-                ]
+                    cols = [
+                        "Tài khoản",
+                        "Họ tên",
+                        "Bộ phận",
+                        "Ngày",
+                        "Ca",
+                        "Giờ vào",
+                        "Giờ ra",
+                        "Trạng thái",
+                        "Ghi chú",
+                    ]
 
-                report = report[
-                    [c for c in cols if c in report.columns]
-                ]
-
-                st.dataframe(
-                    report,
-                    use_container_width=True,
-                    hide_index=True,
-                )
-
-                output = io.BytesIO()
-
-                with pd.ExcelWriter(
-                    output,
-                    engine="openpyxl",
-                ) as writer:
-                    report.to_excel(
-                        writer,
-                        index=False,
-                        sheet_name="BangCong",
+                    st.dataframe(
+                        report[
+                            [c for c in cols if c in report.columns]
+                        ],
+                        use_container_width=True,
+                        hide_index=True,
                     )
 
-                output.seek(0)
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(
+                        output,
+                        engine="openpyxl",
+                    ) as writer:
+                        report.to_excel(
+                            writer,
+                            index=False,
+                            sheet_name="BangCong3Ca",
+                        )
+                    output.seek(0)
 
-                st.download_button(
-                    "⬇️ XUẤT EXCEL",
-                    output.getvalue(),
-                    file_name=(
-                        f"Bang_cong_"
-                        f"{int(month):02d}_"
-                        f"{int(year)}.xlsx"
-                    ),
-                    mime=(
-                        "application/vnd.openxmlformats-officedocument."
-                        "spreadsheetml.sheet"
-                    ),
-                    use_container_width=True,
-                )
-
-        except Exception as e:
-            st.error("Không tải được báo cáo.")
-            st.code(safe_error(e))
+                    st.download_button(
+                        "⬇️ XUẤT EXCEL",
+                        output.getvalue(),
+                        file_name=(
+                            f"Bang_cong_3_ca_"
+                            f"{int(month):02d}_{int(year)}.xlsx"
+                        ),
+                        mime=(
+                            "application/vnd.openxmlformats-officedocument."
+                            "spreadsheetml.sheet"
+                        ),
+                        use_container_width=True,
+                    )
+                else:
+                    st.info("Tháng này chưa có dữ liệu.")
+            else:
+                st.info("Chưa có dữ liệu chấm công.")
 
 
 # ============================================================
