@@ -9,17 +9,19 @@ import calendar
 from datetime import date, datetime
 
 # ============================================================
-# 🕘 WEB CHẤM CÔNG - LỊCH CA + GIỜ LÀM + LƯƠNG THEO GIỜ
+# 🕘 CHẤM CÔNG LỊCH 3 CA — BẢN ỔN ĐỊNH
 # ============================================================
-# Cơ chế:
-# - Mỗi ngày trên lịch có 3 ca: Sáng / Chiều / Tối.
-# - Admin/nhân viên có thể tích sẵn ca làm trên lịch.
-# - Khi ca đã tích, chỉ cần nhập SỐ GIỜ thực tế của ca.
-# - Mỗi tháng nhập LƯƠNG/ GIỜ một lần.
-# - Hệ thống tự tính tổng giờ + tổng lương tháng.
-# - Dữ liệu lưu trực tiếp trên Supabase.
+# Luồng:
+# 1) Mở lịch tháng.
+# 2) Tick ca Sáng / Chiều / Tối.
+# 3) Checkbox chỉ thay đổi "bản nháp" trong session.
+# 4) Bấm DUY NHẤT 1 LẦN: "LƯU LỊCH THÁNG".
+# 5) App đồng bộ TOÀN BỘ tháng lên Supabase.
 #
-# Streamlit Secrets:
+# Không lưu database khi người dùng chỉ mới tick.
+# Vì vậy không có chuyện tick 15 nhưng database chỉ có 9.
+#
+# Secrets:
 # SUPABASE_URL = "https://....supabase.co"
 # SUPABASE_SECRET_KEY = "sb_secret_..."
 # ============================================================
@@ -28,8 +30,15 @@ st.set_page_config(
     page_title="Web Chấm Công",
     page_icon="🕘",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
+SHIFTS = ["Sáng", "Chiều", "Tối"]
+SHIFT_ICONS = {"Sáng": "☀️", "Chiều": "🌤️", "Tối": "🌙"}
+
+# ============================================================
+# SECRETS
+# ============================================================
 try:
     SUPABASE_URL = st.secrets["SUPABASE_URL"].strip().rstrip("/")
     SUPABASE_SECRET_KEY = st.secrets["SUPABASE_SECRET_KEY"].strip()
@@ -39,92 +48,98 @@ except Exception:
 
 REST_URL = f"{SUPABASE_URL}/rest/v1" if SUPABASE_URL else ""
 
-SHIFTS = ["Sáng", "Chiều", "Tối"]
-SHIFT_ICONS = {"Sáng": "☀️", "Chiều": "🌤️", "Tối": "🌙"}
 
 # ============================================================
-# SQL
+# SQL SETUP / MIGRATION
 # ============================================================
-SQL_SETUP = """
--- CHẤM CÔNG LỊCH 3 CA + GIỜ + LƯƠNG
+SQL_SETUP = r"""
+-- CHẠY 1 LẦN TRONG SUPABASE SQL EDITOR
 
--- Bảng users giữ nguyên từ hệ thống cũ.
-
--- 1. Thêm cột ca, giờ làm, tích ca
-ALTER TABLE public.attendance
-ADD COLUMN IF NOT EXISTS shift text;
-
-ALTER TABLE public.attendance
-ADD COLUMN IF NOT EXISTS hours numeric(8,2) DEFAULT 0;
-
-ALTER TABLE public.attendance
-ADD COLUMN IF NOT EXISTS scheduled boolean DEFAULT true;
-
-UPDATE public.attendance
-SET shift = 'Sáng'
-WHERE shift IS NULL OR shift = '';
-
-UPDATE public.attendance
-SET hours = 0
-WHERE hours IS NULL;
-
-UPDATE public.attendance
-SET scheduled = true
-WHERE scheduled IS NULL;
-
-ALTER TABLE public.attendance
-ALTER COLUMN shift SET DEFAULT 'Sáng';
-
-ALTER TABLE public.attendance
-ALTER COLUMN shift SET NOT NULL;
-
-ALTER TABLE public.attendance
-ALTER COLUMN hours SET DEFAULT 0;
-
-ALTER TABLE public.attendance
-ALTER COLUMN scheduled SET DEFAULT true;
-
-ALTER TABLE public.attendance
-ALTER COLUMN hours SET NOT NULL;
-
-ALTER TABLE public.attendance
-ALTER COLUMN scheduled SET NOT NULL;
-
--- 2. Unique theo người + ngày + ca
-ALTER TABLE public.attendance
-DROP CONSTRAINT IF EXISTS attendance_username_work_date_key;
-
-ALTER TABLE public.attendance
-DROP CONSTRAINT IF EXISTS attendance_user_date_unique;
-
-ALTER TABLE public.attendance
-DROP CONSTRAINT IF EXISTS attendance_username_work_date_shift_key;
-
-ALTER TABLE public.attendance
-ADD CONSTRAINT attendance_username_work_date_shift_key
-UNIQUE (username, work_date, shift);
-
--- 3. Bảng lương theo tháng
-CREATE TABLE IF NOT EXISTS public.monthly_wages (
+-- 1. Users
+create table if not exists public.users (
     id uuid primary key default gen_random_uuid(),
-    username text not null,
-    year integer not null,
-    month integer not null,
-    hourly_rate numeric(12,2) not null default 0,
-    created_at timestamptz not null default now(),
-    updated_at timestamptz not null default now(),
-    UNIQUE(username, year, month)
+    username text unique not null,
+    password_hash text not null,
+    full_name text not null,
+    role text not null default 'employee'
+        check (role in ('admin','employee')),
+    department text default '',
+    position text default '',
+    active boolean not null default true,
+    created_at timestamptz not null default now()
 );
 
-CREATE INDEX IF NOT EXISTS attendance_calendar_idx
-ON public.attendance(username, work_date, shift);
+-- 2. Attendance / lịch ca
+create table if not exists public.attendance (
+    id uuid primary key default gen_random_uuid(),
+    username text not null,
+    work_date date not null,
+    shift text not null default 'Sáng',
+    scheduled boolean not null default true,
+    hours numeric(8,2) not null default 0,
+    check_in text default '',
+    check_out text default '',
+    status text default 'Đã xếp ca',
+    note text default '',
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
 
-CREATE INDEX IF NOT EXISTS monthly_wages_lookup_idx
-ON public.monthly_wages(username, year, month);
+-- Nếu attendance cũ đã tồn tại thì bổ sung cột
+alter table public.attendance
+add column if not exists shift text;
 
--- Cấu hình cố định theo tháng:
--- số giờ mỗi ca + lương/giờ. Nhập 1 lần/tháng.
-CREATE TABLE IF NOT EXISTS public.monthly_shift_settings (
+alter table public.attendance
+add column if not exists scheduled boolean default true;
+
+alter table public.attendance
+add column if not exists hours numeric(8,2) default 0;
+
+alter table public.attendance
+add column if not exists updated_at timestamptz default now();
+
+update public.attendance
+set shift = 'Sáng'
+where shift is null or shift = '';
+
+update public.attendance
+set scheduled = true
+where scheduled is null;
+
+update public.attendance
+set hours = 0
+where hours is null;
+
+alter table public.attendance
+alter column shift set not null;
+
+alter table public.attendance
+alter column scheduled set not null;
+
+alter table public.attendance
+alter column hours set not null;
+
+-- Xóa unique cũ nếu có
+alter table public.attendance
+drop constraint if exists attendance_username_work_date_key;
+
+alter table public.attendance
+drop constraint if exists attendance_user_date_unique;
+
+alter table public.attendance
+drop constraint if exists attendance_username_work_date_shift_key;
+
+-- Mỗi nhân viên + ngày + ca chỉ có 1 record
+alter table public.attendance
+add constraint attendance_username_work_date_shift_key
+unique (username, work_date, shift);
+
+create index if not exists attendance_lookup_idx
+on public.attendance(username, work_date, shift);
+
+-- 3. Cấu hình tháng:
+-- nhập 1 lần: số giờ ca Sáng/Chiều/Tối + lương/giờ
+create table if not exists public.monthly_shift_settings (
     id uuid primary key default gen_random_uuid(),
     username text not null,
     year integer not null,
@@ -135,39 +150,28 @@ CREATE TABLE IF NOT EXISTS public.monthly_shift_settings (
     hourly_rate numeric(12,2) not null default 0,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now(),
-    UNIQUE(username, year, month)
+    unique(username, year, month)
 );
 
-CREATE INDEX IF NOT EXISTS monthly_shift_settings_lookup_idx
-ON public.monthly_shift_settings(username, year, month);
+-- 4. Admin mặc định: admin / admin123
+insert into public.users
+(username, password_hash, full_name, role, department, position, active)
+values
+(
+    'admin',
+    '240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9',
+    'Quản trị viên',
+    'admin',
+    'Quản trị',
+    'Administrator',
+    true
+)
+on conflict (username) do nothing;
 """
 
-# ============================================================
-# CSS
-# ============================================================
-st.markdown("""
-<style>
-.block-container {padding-top: 1.5rem;}
-.main-title {font-size: 2.05rem;font-weight:800;margin-bottom:.15rem;}
-.sub-title {color:#6b7280;margin-bottom:1rem;}
-.calendar-day {
-    border:1px solid #e5e7eb;
-    border-radius:14px;
-    padding:8px;
-    margin-bottom:6px;
-    min-height:145px;
-}
-.day-number {font-weight:800;font-size:17px;margin-bottom:4px;}
-.rate-box {
-    border:1px solid #e5e7eb;
-    border-radius:14px;
-    padding:16px;
-}
-</style>
-""", unsafe_allow_html=True)
 
 # ============================================================
-# SUPABASE
+# API
 # ============================================================
 def headers():
     return {
@@ -175,9 +179,10 @@ def headers():
         "Content-Type": "application/json",
     }
 
+
 def sb_request(method, table, params=None, payload=None, prefer=None):
-    if not REST_URL or not SUPABASE_SECRET_KEY:
-        raise RuntimeError("Thiếu Supabase Secrets.")
+    if not SUPABASE_URL or not SUPABASE_SECRET_KEY:
+        raise RuntimeError("Chưa cấu hình Supabase Secrets.")
 
     h = headers()
     if prefer:
@@ -197,38 +202,32 @@ def sb_request(method, table, params=None, payload=None, prefer=None):
 
     return r.json() if r.text else []
 
+
 def select_rows(table, params=None):
     return sb_request("GET", table, params=params)
 
-def insert_row(table, payload):
-    return sb_request(
-        "POST", table, payload=payload,
-        prefer="return=representation"
-    )
 
-def upsert_row(table, payload, on_conflict=None):
-    params = {}
-    if on_conflict:
-        params["on_conflict"] = on_conflict
+def upsert_rows(table, rows, conflict):
+    if not rows:
+        return []
+
     return sb_request(
         "POST",
         table,
+        params={"on_conflict": conflict},
+        payload=rows,
+        prefer="resolution=merge-duplicates,return=minimal",
+    )
+
+
+def delete_rows(table, params=None):
+    return sb_request(
+        "DELETE",
+        table,
         params=params,
-        payload=payload,
-        prefer="resolution=merge-duplicates,return=representation",
+        prefer="return=minimal",
     )
 
-def update_rows(table, params, payload):
-    return sb_request(
-        "PATCH", table, params=params, payload=payload,
-        prefer="return=representation"
-    )
-
-def delete_rows(table, params):
-    return sb_request(
-        "DELETE", table, params=params,
-        prefer="return=minimal"
-    )
 
 def safe_error(e):
     s = str(e)
@@ -236,245 +235,308 @@ def safe_error(e):
         s = s.replace(SUPABASE_SECRET_KEY, "[HIDDEN]")
     return s
 
-def sha256(s):
-    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+def sha256(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
 
 # ============================================================
-# DATA HELPERS
+# DATABASE HELPERS
 # ============================================================
 def get_user(username):
-    rows = select_rows("users", {
-        "select": "*",
-        "username": f"eq.{username}",
-        "limit": "1",
-    })
+    rows = select_rows(
+        "users",
+        {
+            "select": "*",
+            "username": f"eq.{username}",
+            "limit": "1",
+        },
+    )
     return rows[0] if rows else None
 
-def get_users_df():
-    return pd.DataFrame(select_rows("users", {
-        "select": "*",
-        "order": "created_at.asc",
-    }))
 
-def get_attendance_df(username=None, year=None, month=None):
-    params = {
-        "select": "*",
-        "order": "work_date.asc,shift.asc",
-    }
+def get_users():
+    return pd.DataFrame(
+        select_rows(
+            "users",
+            {
+                "select": "*",
+                "order": "created_at.asc",
+            },
+        )
+    )
 
-    if username:
-        params["username"] = f"eq.{username}"
 
-    rows = select_rows("attendance", params)
-    df = pd.DataFrame(rows)
+def get_month_attendance(username, year, month):
+    # Quan trọng: lấy TOÀN BỘ attendance của user,
+    # sau đó lọc tháng trong Python.
+    # Không truyền đồng thời gte/lte bằng dict cùng key.
+    df = pd.DataFrame(
+        select_rows(
+            "attendance",
+            {
+                "select": "*",
+                "username": f"eq.{username}",
+                "order": "work_date.asc,shift.asc",
+            },
+        )
+    )
 
     if df.empty:
         return df
 
-    df["work_date"] = df["work_date"].astype(str).str[:10]
+    df["work_date"] = (
+        df["work_date"].astype(str).str[:10]
+    )
 
-    if year is not None and month is not None:
-        prefix = f"{int(year):04d}-{int(month):02d}-"
-        df = df[df["work_date"].str.startswith(prefix)].copy()
+    prefix = f"{int(year):04d}-{int(month):02d}-"
 
-    if "scheduled" in df.columns:
-        df["_scheduled"] = df["scheduled"].map(
-            lambda x: x if isinstance(x, bool)
+    df = df[
+        df["work_date"].str.startswith(prefix)
+    ].copy()
+
+    if "scheduled" not in df.columns:
+        df["scheduled"] = True
+
+    df["_scheduled"] = df["scheduled"].map(
+        lambda x: (
+            x if isinstance(x, bool)
             else str(x).strip().lower() in ("true", "1", "yes")
         )
-    else:
-        df["_scheduled"] = False
-
-    if "hours" in df.columns:
-        df["hours"] = pd.to_numeric(df["hours"], errors="coerce").fillna(0.0)
+    )
 
     return df
 
-def get_shift(username, work_date, shift):
-    rows = select_rows("attendance", {
-        "select": "*",
-        "username": f"eq.{username}",
-        "work_date": f"eq.{work_date}",
-        "shift": f"eq.{shift}",
-        "limit": "1",
-    })
-    return rows[0] if rows else None
 
-def sync_month_schedule(username, year, month, selected_cells, settings):
-    # Get all saved rows for this month.
-    current = get_attendance_df(username, year, month)
-    existing = set()
-
-    if not current.empty:
-        for _, r in current.iterrows():
-            if bool(r.get("_scheduled", False)):
-                existing.add((str(r["work_date"]), str(r.get("shift", ""))))
-
-    desired_rows = []
-    desired = set()
-
-    for (work_date, shift), checked in selected_cells.items():
-        if checked:
-            desired.add((work_date, shift))
-            desired_rows.append({
-                "username": username,
-                "work_date": work_date,
-                "shift": shift,
-                "scheduled": True,
-                "hours": shift_hours(settings, shift),
-                "check_in": "",
-                "check_out": "",
-                "status": "Đã xếp ca",
-                "note": "",
-                "updated_at": datetime.utcnow().isoformat(),
-            })
-
-    # One request for all checked cells.
-    if desired_rows:
-        sb_request(
-            "POST",
-            "attendance",
-            params={"on_conflict": "username,work_date,shift"},
-            payload=desired_rows,
-            prefer="resolution=merge-duplicates,return=minimal",
-        )
-
-    # Delete only rows that were previously saved but now unticked.
-    for work_date, shift in (existing - desired):
-        delete_shift(username, work_date, shift)
-
-    return len(desired_rows)
-
-def save_shift(username, work_date, shift, scheduled, hours, note=""):
-    return upsert_row("attendance", {
-        "username": username,
-        "work_date": work_date,
-        "shift": shift,
-        "scheduled": bool(scheduled),
-        "hours": float(hours),
-        "check_in": "",
-        "check_out": "",
-        "status": "Đã chấm" if scheduled else "",
-        "note": note,
-        "updated_at": datetime.utcnow().isoformat(),
-    }, on_conflict="username,work_date,shift")
-
-def delete_shift(username, work_date, shift):
-    return delete_rows("attendance", {
-        "username": f"eq.{username}",
-        "work_date": f"eq.{work_date}",
-        "shift": f"eq.{shift}",
-    })
-
-def get_wage(username, year, month):
-    rows = select_rows("monthly_wages", {
-        "select": "*",
-        "username": f"eq.{username}",
-        "year": f"eq.{int(year)}",
-        "month": f"eq.{int(month)}",
-        "limit": "1",
-    })
-    return rows[0] if rows else None
-
-def save_wage(username, year, month, hourly_rate):
-    return upsert_row(
-        "monthly_wages",
+def get_month_settings(username, year, month):
+    rows = select_rows(
+        "monthly_shift_settings",
         {
-            "username": username,
-            "year": int(year),
-            "month": int(month),
-            "hourly_rate": float(hourly_rate),
-            "updated_at": datetime.utcnow().isoformat(),
+            "select": "*",
+            "username": f"eq.{username}",
+            "year": f"eq.{int(year)}",
+            "month": f"eq.{int(month)}",
+            "limit": "1",
         },
-        on_conflict="username,year,month",
     )
-
-def get_shift_settings(username, year, month):
-    rows = select_rows("monthly_shift_settings", {
-        "select": "*",
-        "username": f"eq.{username}",
-        "year": f"eq.{int(year)}",
-        "month": f"eq.{int(month)}",
-        "limit": "1",
-    })
     return rows[0] if rows else None
 
 
-def save_shift_settings(
+def save_month_settings(
     username,
     year,
     month,
-    morning_hours,
-    afternoon_hours,
-    evening_hours,
+    morning,
+    afternoon,
+    evening,
     hourly_rate,
 ):
-    return upsert_row(
+    upsert_rows(
         "monthly_shift_settings",
-        {
+        [{
             "username": username,
             "year": int(year),
             "month": int(month),
-            "morning_hours": float(morning_hours),
-            "afternoon_hours": float(afternoon_hours),
-            "evening_hours": float(evening_hours),
+            "morning_hours": float(morning),
+            "afternoon_hours": float(afternoon),
+            "evening_hours": float(evening),
             "hourly_rate": float(hourly_rate),
             "updated_at": datetime.utcnow().isoformat(),
-        },
-        on_conflict="username,year,month",
+        }],
+        "username,year,month",
     )
 
 
 def shift_hours(settings, shift):
     if not settings:
         return 0.0
-    return float({
-        "Sáng": settings.get("morning_hours", 0),
-        "Chiều": settings.get("afternoon_hours", 0),
-        "Tối": settings.get("evening_hours", 0),
-    }.get(shift, 0) or 0)
+
+    if shift == "Sáng":
+        return float(settings.get("morning_hours", 0) or 0)
+    if shift == "Chiều":
+        return float(settings.get("afternoon_hours", 0) or 0)
+    return float(settings.get("evening_hours", 0) or 0)
 
 
-def authenticate(username, password):
-    user = get_user(username.strip())
-    if not user or not bool(user.get("active")):
-        return None
+def sync_full_month(
+    username,
+    year,
+    month,
+    selected_keys,
+    settings,
+):
+    """
+    Đồng bộ toàn bộ tháng:
+    - selected_keys: toàn bộ các ô đang tick trên lịch.
+    - Những ô tick => upsert.
+    - Những ô đã tồn tại nhưng bị bỏ tick => delete.
+    """
 
-    if hmac.compare_digest(
-        str(user.get("password_hash", "")),
-        sha256(password)
-    ):
-        return user
+    current = get_month_attendance(
+        username,
+        year,
+        month,
+    )
 
-    return None
+    existing_keys = set()
+
+    if not current.empty:
+        for _, row in current.iterrows():
+            if bool(row.get("_scheduled", False)):
+                existing_keys.add((
+                    str(row["work_date"])[:10],
+                    str(row.get("shift", "Sáng")),
+                ))
+
+    # Toàn bộ ca đang tick.
+    rows_to_upsert = []
+
+    for work_date, shift in selected_keys:
+        rows_to_upsert.append({
+            "username": username,
+            "work_date": work_date,
+            "shift": shift,
+            "scheduled": True,
+            "hours": shift_hours(settings, shift),
+            "check_in": "",
+            "check_out": "",
+            "status": "Đã xếp ca",
+            "note": "",
+            "updated_at": datetime.utcnow().isoformat(),
+        })
+
+    # Ghi toàn bộ các dòng đã tick trong MỘT request.
+    if rows_to_upsert:
+        upsert_rows(
+            "attendance",
+            rows_to_upsert,
+            "username,work_date,shift",
+        )
+
+    desired_keys = set(selected_keys)
+
+    # Những ca trước đó có nhưng hiện tại bỏ tick.
+    to_delete = existing_keys - desired_keys
+
+    if to_delete:
+        for work_date, shift in to_delete:
+            delete_rows(
+                "attendance",
+                {
+                    "username": f"eq.{username}",
+                    "work_date": f"eq.{work_date}",
+                    "shift": f"eq.{shift}",
+                },
+            )
+
+    # Đọc lại DB để xác nhận.
+    verified = get_month_attendance(
+        username,
+        year,
+        month,
+    )
+
+    saved_count = (
+        int(verified["_scheduled"].sum())
+        if not verified.empty
+        else 0
+    )
+
+    return saved_count
+
+
+# ============================================================
+# CSS
+# ============================================================
+st.markdown(
+    """
+<style>
+.block-container {
+    padding-top: 1.5rem;
+}
+
+.app-title {
+    font-size: 2.1rem;
+    font-weight: 800;
+}
+
+.muted {
+    color: #6b7280;
+}
+
+.calendar-cell {
+    border: 1px solid #e5e7eb;
+    border-radius: 14px;
+    padding: 7px;
+    min-height: 150px;
+    margin-bottom: 8px;
+}
+
+.day-number {
+    font-weight: 800;
+    font-size: 17px;
+    margin-bottom: 5px;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
 
 # ============================================================
 # CONFIG CHECK
 # ============================================================
 if not SUPABASE_URL or not SUPABASE_SECRET_KEY:
-    st.title("🕘 WEB CHẤM CÔNG")
+    st.markdown(
+        '<div class="app-title">🕘 WEB CHẤM CÔNG</div>',
+        unsafe_allow_html=True,
+    )
+
     st.warning("Chưa cấu hình Supabase.")
+
     st.code(
         'SUPABASE_URL = "https://YOUR_PROJECT.supabase.co"\n'
         'SUPABASE_SECRET_KEY = "sb_secret_..."',
         language="toml",
     )
+
     st.stop()
 
+
+# ============================================================
+# DATABASE CHECK
+# ============================================================
 try:
-    select_rows("users", {"select": "id", "limit": "1"})
-    select_rows("attendance", {"select": "id,shift,hours,scheduled", "limit": "1"})
-    select_rows("monthly_wages", {"select": "id", "limit": "1"})
-    select_rows("monthly_shift_settings", {"select": "id", "limit": "1"})
-except Exception as e:
-    st.error("❌ Database chưa đủ cột/bảng cho phiên bản này.")
-    st.code(safe_error(e))
-    st.markdown(
-        "Vào **Supabase → SQL Editor → New query**, chạy toàn bộ "
-        "SQL `SQL_SETUP` trong file Python này một lần."
+    select_rows(
+        "users",
+        {"select": "id", "limit": "1"},
     )
+
+    select_rows(
+        "attendance",
+        {
+            "select": "id,work_date,shift,scheduled,hours",
+            "limit": "1",
+        },
+    )
+
+    select_rows(
+        "monthly_shift_settings",
+        {"select": "id", "limit": "1"},
+    )
+
+except Exception as e:
+    st.error("❌ Database chưa đúng cấu trúc.")
+    st.code(safe_error(e))
+
+    st.markdown(
+        "Chạy SQL bên dưới **1 lần** trong Supabase → SQL Editor:"
+    )
+
     st.code(SQL_SETUP, language="sql")
+
     st.stop()
+
 
 # ============================================================
 # LOGIN
@@ -482,116 +544,191 @@ except Exception as e:
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
+
 if not st.session_state.logged_in:
     st.markdown(
-        '<div class="main-title">🕘 WEB CHẤM CÔNG</div>',
-        unsafe_allow_html=True
+        '<div class="app-title">🕘 WEB CHẤM CÔNG</div>',
+        unsafe_allow_html=True,
     )
-    st.caption("Lịch ca 3 ca/ngày · Nhập giờ · Tự tính lương")
+
+    st.caption(
+        "Lịch 3 ca • Tích ca • Tự tính giờ • Tự tính lương"
+    )
 
     with st.form("login"):
         username = st.text_input("Tên đăng nhập")
-        password = st.text_input("Mật khẩu", type="password")
+        password = st.text_input(
+            "Mật khẩu",
+            type="password",
+        )
 
         if st.form_submit_button(
             "🔐 ĐĂNG NHẬP",
-            use_container_width=True
+            use_container_width=True,
         ):
             try:
-                user = authenticate(username, password)
-                if user:
+                user = get_user(username.strip())
+
+                if (
+                    user
+                    and bool(user.get("active"))
+                    and hmac.compare_digest(
+                        str(user.get("password_hash", "")),
+                        sha256(password),
+                    )
+                ):
                     st.session_state.logged_in = True
                     st.session_state.username = user["username"]
                     st.rerun()
                 else:
-                    st.error("Sai tài khoản hoặc mật khẩu.")
+                    st.error(
+                        "Sai tài khoản hoặc mật khẩu."
+                    )
+
             except Exception as e:
                 st.error("Lỗi đăng nhập.")
                 st.code(safe_error(e))
 
-    st.caption("Admin mặc định: admin / admin123")
+    st.caption(
+        "Admin mặc định: admin / admin123"
+    )
+
     st.stop()
 
-current_user = get_user(st.session_state.username)
 
-if not current_user or not bool(current_user.get("active")):
+current_user = get_user(
+    st.session_state.username
+)
+
+if not current_user or not bool(
+    current_user.get("active")
+):
     st.session_state.clear()
-    st.error("Tài khoản không tồn tại hoặc đã bị khóa.")
+    st.error(
+        "Tài khoản không tồn tại hoặc đã bị khóa."
+    )
     st.stop()
+
 
 # ============================================================
 # SIDEBAR
 # ============================================================
 with st.sidebar:
     st.markdown("## 🕘 CHẤM CÔNG")
-    st.write(f"👤 **{current_user['full_name']}**")
-    st.caption(f"`{current_user['username']}`")
+    st.write(
+        f"👤 **{current_user['full_name']}**"
+    )
+    st.caption(
+        f"`{current_user['username']}`"
+    )
+    st.caption(
+        f"Vai trò: `{current_user['role']}`"
+    )
+
     st.divider()
 
-    if st.button("🚪 Đăng xuất", use_container_width=True):
+    if st.button(
+        "🚪 Đăng xuất",
+        use_container_width=True,
+    ):
         st.session_state.clear()
         st.rerun()
 
-# ============================================================
-# CALENDAR
-# ============================================================
-def render_calendar(username, key_prefix):
-    today = date.today()
 
-    c1, c2 = st.columns(2)
-    year = c1.number_input(
-        "Năm", 2020, 2100, today.year,
-        key=f"{key_prefix}_year"
-    )
-    month = c2.selectbox(
-        "Tháng", range(1, 13), today.month - 1,
-        key=f"{key_prefix}_month"
+# ============================================================
+# CALENDAR DRAFT
+# ============================================================
+def calendar_draft_key(username, year, month):
+    return f"draft_{username}_{int(year)}_{int(month):02d}"
+
+
+def load_draft(username, year, month):
+    key = calendar_draft_key(
+        username, year, month
     )
 
-    df = get_attendance_df(username, int(year), int(month))
-    saved = {}
+    if key in st.session_state:
+        return st.session_state[key]
+
+    df = get_month_attendance(
+        username,
+        year,
+        month,
+    )
+
+    draft = set()
 
     if not df.empty:
-        for _, r in df.iterrows():
-            if bool(r.get("_scheduled", False)):
-                saved[(str(r["work_date"]), str(r.get("shift", "Sáng")))] = True
+        for _, row in df.iterrows():
+            if bool(row.get("_scheduled", False)):
+                draft.add((
+                    str(row["work_date"])[:10],
+                    str(row["shift"]),
+                ))
 
-    st.caption(
-        "☑️ Tích ca trên toàn bộ tháng → bấm **💾 LƯU LỊCH THÁNG** một lần."
+    st.session_state[key] = draft
+
+    return draft
+
+
+def render_schedule_calendar(
+    username,
+    year,
+    month,
+    key_prefix,
+):
+    draft = load_draft(
+        username,
+        year,
+        month,
     )
 
-    weeks = calendar.Calendar(firstweekday=0).monthdayscalendar(
-        int(year), int(month)
-    )
-    weekdays = ["T2", "T3", "T4", "T5", "T6", "T7", "CN"]
-
-    head = st.columns(7)
-    for i, w in enumerate(weekdays):
-        head[i].markdown(
-            f"<div style='text-align:center;font-weight:700'>{w}</div>",
-            unsafe_allow_html=True,
+    # Khóa tháng hiện tại bằng form.
+    with st.form(
+        f"calendar_form_{key_prefix}_{year}_{month}"
+    ):
+        weeks = calendar.Calendar(
+            firstweekday=0
+        ).monthdayscalendar(
+            int(year),
+            int(month),
         )
 
-    # ONE form contains every checkbox in the whole month.
-    # Streamlit only commits the changes when the button is submitted,
-    # preventing partial saving after each checkbox rerun.
-    selected = {}
+        weekdays = [
+            "T2", "T3", "T4",
+            "T5", "T6", "T7", "CN"
+        ]
 
-    with st.form(f"{key_prefix}_month_form", clear_on_submit=False):
+        header = st.columns(7)
+
+        for i, wd in enumerate(weekdays):
+            header[i].markdown(
+                f"<div style='text-align:center;font-weight:700'>{wd}</div>",
+                unsafe_allow_html=True,
+            )
+
+        # IMPORTANT:
+        # Không lưu database tại checkbox.
+        # Checkbox chỉ cập nhật vào draft khi form submit.
+        all_keys = []
+
         for week in weeks:
             cols = st.columns(7)
 
-            for idx, day in enumerate(week):
-                with cols[idx]:
+            for col_idx, day in enumerate(week):
+                with cols[col_idx]:
+
                     if day == 0:
                         st.markdown(
-                            "<div style='min-height:150px'></div>",
+                            "<div style='min-height:165px'></div>",
                             unsafe_allow_html=True,
                         )
                         continue
 
                     ds = (
-                        f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
+                        f"{int(year):04d}-"
+                        f"{int(month):02d}-"
+                        f"{int(day):02d}"
                     )
 
                     st.markdown(
@@ -600,208 +737,406 @@ def render_calendar(username, key_prefix):
                     )
 
                     for shift in SHIFTS:
-                        selected[(ds, shift)] = st.checkbox(
+                        k = (ds, shift)
+                        all_keys.append(k)
+
+                        st.checkbox(
                             f"{SHIFT_ICONS[shift]} {shift}",
-                            value=((ds, shift) in saved),
-                            key=f"{key_prefix}_cb_{ds}_{shift}",
+                            value=(k in draft),
+                            key=(
+                                f"{key_prefix}_"
+                                f"{int(year)}_{int(month):02d}_"
+                                f"{day}_{shift}"
+                            ),
                         )
 
-                    st.markdown(
-                        "<hr style='margin:5px 0 8px;border:none;"
-                        "border-top:1px solid #eee'>",
-                        unsafe_allow_html=True,
-                    )
-
-        submit = st.form_submit_button(
+        save = st.form_submit_button(
             "💾 LƯU LỊCH THÁNG",
             use_container_width=True,
         )
 
-    if submit:
-        try:
-            settings = get_shift_settings(username, int(year), int(month))
-            if settings is None:
-                settings = {
-                    "morning_hours": 0,
-                    "afternoon_hours": 0,
-                    "evening_hours": 0,
-                }
+    if save:
+        # Read EVERY checkbox from session state.
+        new_draft = set()
 
-            saved_count = sync_month_schedule(
+        for day_key in all_keys:
+            ds, shift = day_key
+
+            widget_key = (
+                f"{key_prefix}_"
+                f"{int(year)}_{int(month):02d}_"
+                f"{int(ds[-2:])}_{shift}"
+            )
+
+            if st.session_state.get(
+                widget_key,
+                False,
+            ):
+                new_draft.add(
+                    (ds, shift)
+                )
+
+        # Replace the draft with the complete month state.
+        st.session_state[
+            calendar_draft_key(
                 username,
-                int(year),
-                int(month),
-                selected,
+                year,
+                month,
+            )
+        ] = new_draft
+
+        # Use current month settings for hours.
+        settings = get_month_settings(
+            username,
+            year,
+            month,
+        )
+
+        if settings is None:
+            settings = {
+                "morning_hours": 0,
+                "afternoon_hours": 0,
+                "evening_hours": 0,
+            }
+
+        try:
+            saved_count = sync_full_month(
+                username,
+                year,
+                month,
+                new_draft,
                 settings,
             )
 
-            verify = get_attendance_df(username, int(year), int(month))
-            verify_count = int(verify["_scheduled"].sum()) if not verify.empty else 0
+            # Rebuild draft directly from verified DB.
+            verified_df = get_month_attendance(
+                username,
+                year,
+                month,
+            )
+
+            verified = set()
+
+            if not verified_df.empty:
+                for _, row in verified_df.iterrows():
+                    if bool(
+                        row.get(
+                            "_scheduled",
+                            False,
+                        )
+                    ):
+                        verified.add(
+                            (
+                                str(row["work_date"])[:10],
+                                str(row["shift"]),
+                            )
+                        )
+
+            st.session_state[
+                calendar_draft_key(
+                    username,
+                    year,
+                    month,
+                )
+            ] = verified
 
             st.success(
-                f"✅ Đã lưu {saved_count} ca. "
-                f"Database hiện có {verify_count} ca cho tháng {int(month):02d}/{int(year)}."
+                f"✅ ĐÃ LƯU: {saved_count} CA. "
+                f"Database đã xác nhận đúng {len(verified)} CA."
             )
-            st.rerun()
+
+            return verified
+
         except Exception as e:
-            st.error("❌ Không thể lưu toàn bộ lịch tháng.")
-            st.code(safe_error(e))
+            st.error(
+                "❌ Không thể lưu toàn bộ lịch tháng."
+            )
+            st.code(
+                safe_error(e)
+            )
 
-    return int(year), int(month), today.isoformat()
+    return draft
+
 
 # ============================================================
-# EMPLOYEE
+# MONTHLY SETTINGS
 # ============================================================
-def employee_page():
-    st.markdown(
-        f'<div class="main-title">Xin chào, {current_user["full_name"]} 👋</div>',
-        unsafe_allow_html=True
+def monthly_settings_form(
+    username,
+    year,
+    month,
+):
+    current = get_month_settings(
+        username,
+        year,
+        month,
     )
 
-    st.markdown("### 📅 Lịch chấm công")
+    st.subheader(
+        f"⚙️ Cấu hình tháng {month:02d}/{year}"
+    )
+
     st.caption(
-        "Mỗi ngày có 3 ô ca. **Chỉ cần tích ☑️ ca đã làm** — "
-        "không phải nhập giờ từng ngày."
+        "Nhập **1 lần/tháng**. Sau đó không nhập lại số giờ ở từng ngày."
     )
 
-    year, month, _ = render_calendar(
-        current_user["username"],
-        "emp_cal"
-    )
-
-    settings = get_shift_settings(
-        current_user["username"], year, month
-    )
-
-    st.divider()
-    st.subheader("⚙️ Cấu hình tháng")
-
-    if settings:
-        st.success(
-            "Đã có cấu hình tháng. Thời gian ca và lương được dùng tự động "
-            "cho toàn bộ tháng này."
-        )
-
-    with st.form(f"monthly_settings_{year}_{month}"):
+    with st.form(
+        f"settings_{username}_{year}_{month}"
+    ):
         c1, c2, c3, c4 = st.columns(4)
 
         morning = c1.number_input(
             "☀️ Sáng (giờ)",
             min_value=0.0,
             max_value=24.0,
-            value=float(settings.get("morning_hours", 4) if settings else 4),
             step=0.5,
+            value=float(
+                current.get(
+                    "morning_hours", 4
+                )
+                if current
+                else 4
+            ),
         )
+
         afternoon = c2.number_input(
             "🌤️ Chiều (giờ)",
             min_value=0.0,
             max_value=24.0,
-            value=float(settings.get("afternoon_hours", 4) if settings else 4),
             step=0.5,
+            value=float(
+                current.get(
+                    "afternoon_hours", 4
+                )
+                if current
+                else 4
+            ),
         )
+
         evening = c3.number_input(
             "🌙 Tối (giờ)",
             min_value=0.0,
             max_value=24.0,
-            value=float(settings.get("evening_hours", 4) if settings else 4),
             step=0.5,
+            value=float(
+                current.get(
+                    "evening_hours", 4
+                )
+                if current
+                else 4
+            ),
         )
-        rate = c4.number_input(
+
+        hourly_rate = c4.number_input(
             "💰 Lương / giờ",
             min_value=0.0,
-            value=float(settings.get("hourly_rate", 0) if settings else 0),
             step=1000.0,
             format="%.0f",
+            value=float(
+                current.get(
+                    "hourly_rate", 0
+                )
+                if current
+                else 0
+            ),
         )
 
-        save = st.form_submit_button(
+        if st.form_submit_button(
             "💾 LƯU CẤU HÌNH THÁNG",
             use_container_width=True,
-        )
-
-        if save:
+        ):
             try:
-                save_shift_settings(
-                    current_user["username"],
+                save_month_settings(
+                    username,
                     year,
                     month,
                     morning,
                     afternoon,
                     evening,
-                    rate,
+                    hourly_rate,
                 )
                 st.success(
-                    "✅ Đã lưu. Từ giờ em chỉ cần tích ca trên lịch."
+                    "✅ Đã lưu cấu hình tháng."
                 )
                 st.rerun()
-            except Exception as e:
-                st.error("Không lưu được cấu hình tháng.")
-                st.code(safe_error(e))
 
-    # Tổng hợp tự động từ các ca đã tích.
-    df = get_attendance_df(
-        current_user["username"], year, month
+            except Exception as e:
+                st.error(
+                    "Không lưu được cấu hình tháng."
+                )
+                st.code(
+                    safe_error(e)
+                )
+
+    return get_month_settings(
+        username,
+        year,
+        month,
     )
 
-    total_hours = 0.0
-    total_shifts = 0
 
-    if not df.empty:
-        df = df[df["_scheduled"]].copy()
-        total_shifts = len(df)
-        total_hours = sum(
-            shift_hours(settings, str(shift))
-            for shift in df["shift"].tolist()
-        )
+# ============================================================
+# EMPLOYEE
+# ============================================================
+def employee_page():
+    today = date.today()
 
-    salary = total_hours * float(rate)
+    st.markdown(
+        f'<div class="app-title">Xin chào, '
+        f'{current_user["full_name"]} 👋</div>',
+        unsafe_allow_html=True,
+    )
 
-    a, b, c = st.columns(3)
-    a.metric("☑️ Tổng ca", total_shifts)
-    b.metric("⏱️ Tổng giờ", f"{total_hours:g} giờ")
-    c.metric("💵 Tổng lương", f"{salary:,.0f} đ")
+    st.markdown(
+        "### 📅 LỊCH CHẤM CÔNG"
+    )
+
+    st.caption(
+        "Tích ca trên toàn bộ lịch → "
+        "**Lưu lịch tháng một lần**. Không tự động ghi từng checkbox."
+    )
+
+    c1, c2 = st.columns(2)
+
+    year = c1.number_input(
+        "Năm",
+        2020,
+        2100,
+        today.year,
+        key="emp_year",
+    )
+
+    month = c2.selectbox(
+        "Tháng",
+        range(1, 13),
+        today.month - 1,
+        key="emp_month",
+    )
+
+    settings = monthly_settings_form(
+        current_user["username"],
+        int(year),
+        int(month),
+    )
 
     st.divider()
-    st.subheader("📋 Chi tiết ca đã tích")
+
+    render_schedule_calendar(
+        current_user["username"],
+        int(year),
+        int(month),
+        "employee",
+    )
+
+    st.divider()
+
+    df = get_month_attendance(
+        current_user["username"],
+        int(year),
+        int(month),
+    )
 
     if df.empty:
-        st.info("Chưa tích ca nào trong tháng.")
+        total_shifts = 0
+    else:
+        df = df[df["_scheduled"]].copy()
+        total_shifts = len(df)
+
+    total_hours = 0.0
+
+    if not df.empty and settings:
+        total_hours = sum(
+            shift_hours(settings, s)
+            for s in df["shift"].tolist()
+        )
+
+    hourly_rate = float(
+        settings.get("hourly_rate", 0)
+        if settings
+        else 0
+    )
+
+    total_salary = (
+        total_hours * hourly_rate
+    )
+
+    a, b, c = st.columns(3)
+
+    a.metric(
+        "☑️ Tổng ca",
+        total_shifts,
+    )
+
+    b.metric(
+        "⏱️ Tổng giờ",
+        f"{total_hours:g} giờ",
+    )
+
+    c.metric(
+        "💵 Tổng lương",
+        f"{total_salary:,.0f} đ",
+    )
+
+    # Chi tiết đã tích.
+    st.subheader(
+        "📋 Các ca đã tích"
+    )
+
+    if df.empty:
+        st.info(
+            "Chưa có ca nào được lưu."
+        )
         return
 
     rows = []
-    for _, r in df.iterrows():
-        shift = str(r["shift"])
-        hrs = shift_hours(settings, shift)
+
+    for _, row in df.iterrows():
+        shift = str(row["shift"])
+        hours = shift_hours(
+            settings,
+            shift,
+        )
+
         rows.append({
             "Ngày": datetime.strptime(
-                str(r["work_date"])[:10], "%Y-%m-%d"
+                str(row["work_date"])[:10],
+                "%Y-%m-%d",
             ).strftime("%d/%m/%Y"),
             "Ca": shift,
-            "Số giờ cố định": hrs,
-            "Lương/giờ": rate,
-            "Tiền ca": hrs * float(rate),
+            "Số giờ": hours,
+            "Lương/giờ": hourly_rate,
+            "Tiền ca": hours * hourly_rate,
         })
 
     report = pd.DataFrame(rows)
+
     st.dataframe(
         report,
         use_container_width=True,
-        hide_index=True
+        hide_index=True,
     )
 
     output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+
+    with pd.ExcelWriter(
+        output,
+        engine="openpyxl",
+    ) as writer:
         report.to_excel(
             writer,
             index=False,
-            sheet_name="BangCong"
+            sheet_name="BangCong",
         )
+
     output.seek(0)
 
     st.download_button(
-        "⬇️ XUẤT BẢNG CÔNG + LƯƠNG",
+        "⬇️ XUẤT EXCEL",
         output.getvalue(),
-        file_name=f"Bang_cong_{year}_{month:02d}.xlsx",
+        file_name=(
+            f"Bang_cong_{current_user['username']}_"
+            f"{int(year)}_{int(month):02d}.xlsx"
+        ),
         mime=(
             "application/vnd.openxmlformats-officedocument."
             "spreadsheetml.sheet"
@@ -809,20 +1144,21 @@ def employee_page():
         use_container_width=True,
     )
 
+
 # ============================================================
 # ADMIN
 # ============================================================
 def admin_page():
     st.markdown(
-        '<div class="main-title">🛠️ TRUNG TÂM QUẢN TRỊ</div>',
-        unsafe_allow_html=True
+        '<div class="app-title">🛠️ TRUNG TÂM QUẢN TRỊ</div>',
+        unsafe_allow_html=True,
     )
 
-    users = get_users_df()
+    users = get_users()
 
     tab1, tab2, tab3 = st.tabs([
         "👥 Nhân viên",
-        "📅 Xếp ca trên lịch",
+        "📅 Xếp ca",
         "💰 Bảng lương",
     ])
 
@@ -831,19 +1167,24 @@ def admin_page():
             st.info("Chưa có tài khoản.")
         else:
             display = users.copy()
-            display["Trạng thái"] = display["active"].map({
+
+            display["Trạng thái"] = display[
+                "active"
+            ].map({
                 True: "Đang hoạt động",
                 False: "Đã khóa",
             })
 
+            display = display.rename(columns={
+                "username": "Tài khoản",
+                "full_name": "Họ tên",
+                "role": "Vai trò",
+                "department": "Bộ phận",
+                "position": "Chức vụ",
+            })
+
             st.dataframe(
-                display.rename(columns={
-                    "username": "Tài khoản",
-                    "full_name": "Họ tên",
-                    "role": "Vai trò",
-                    "department": "Bộ phận",
-                    "position": "Chức vụ",
-                })[[
+                display[[
                     "Tài khoản",
                     "Họ tên",
                     "Vai trò",
@@ -855,101 +1196,81 @@ def admin_page():
                 hide_index=True,
             )
 
-    with tab2:
-        employees = (
-            users[users["role"] == "employee"]
-            if not users.empty else pd.DataFrame()
-        )
-
-        if employees.empty:
-            st.info("Chưa có nhân viên.")
-        else:
-            options = {
-                f"{r['full_name']} ({r['username']})":
-                r["username"]
-                for _, r in employees.iterrows()
-            }
-
-            label = st.selectbox(
-                "Chọn nhân viên",
-                list(options.keys()),
-                key="admin_schedule_user"
-            )
-            username = options[label]
-
-            st.info(
-                "Tích ☀️ Sáng / 🌤️ Chiều / 🌙 Tối trực tiếp trên lịch. "
-                "Ca đã tích sẽ được tính theo số giờ cố định của tháng."
-            )
-
-            year, month, _ = render_calendar(
-                username,
-                "admin_cal"
-            )
-
-            settings = get_shift_settings(
-                username, year, month
-            )
-
-            st.subheader("⚙️ Cấu hình tháng cho nhân viên")
-
-            with st.form(f"admin_month_settings_{username}_{year}_{month}"):
-                c1, c2, c3, c4 = st.columns(4)
-
-                morning = c1.number_input(
-                    "☀️ Sáng (giờ)",
-                    min_value=0.0,
-                    max_value=24.0,
-                    value=float(settings.get("morning_hours", 4) if settings else 4),
-                    step=0.5,
-                )
-                afternoon = c2.number_input(
-                    "🌤️ Chiều (giờ)",
-                    min_value=0.0,
-                    max_value=24.0,
-                    value=float(settings.get("afternoon_hours", 4) if settings else 4),
-                    step=0.5,
-                )
-                evening = c3.number_input(
-                    "🌙 Tối (giờ)",
-                    min_value=0.0,
-                    max_value=24.0,
-                    value=float(settings.get("evening_hours", 4) if settings else 4),
-                    step=0.5,
-                )
-                rate = c4.number_input(
-                    "💰 Lương / giờ",
-                    min_value=0.0,
-                    value=float(settings.get("hourly_rate", 0) if settings else 0),
-                    step=1000.0,
-                    format="%.0f",
-                )
-
-                if st.form_submit_button(
-                    "💾 LƯU CẤU HÌNH THÁNG",
-                    use_container_width=True,
+            with st.expander(
+                "➕ Tạo tài khoản"
+            ):
+                with st.form(
+                    "create_user"
                 ):
-                    try:
-                        save_shift_settings(
-                            username,
-                            year,
-                            month,
-                            morning,
-                            afternoon,
-                            evening,
-                            rate,
-                        )
-                        st.success("✅ Đã lưu cấu hình tháng.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error("Không lưu được.")
-                        st.code(safe_error(e))
+                    c1, c2 = st.columns(2)
 
-    with tab3:
-        employees = (
-            users[users["role"] == "employee"]
-            if not users.empty else pd.DataFrame()
-        )
+                    username = c1.text_input(
+                        "Tên đăng nhập *"
+                    )
+
+                    full_name = c1.text_input(
+                        "Họ tên *"
+                    )
+
+                    password = c1.text_input(
+                        "Mật khẩu *",
+                        type="password",
+                    )
+
+                    role = c2.selectbox(
+                        "Vai trò",
+                        ["employee", "admin"],
+                    )
+
+                    department = c2.text_input(
+                        "Bộ phận"
+                    )
+
+                    position = c2.text_input(
+                        "Chức vụ"
+                    )
+
+                    if st.form_submit_button(
+                        "➕ TẠO TÀI KHOẢN",
+                        use_container_width=True,
+                    ):
+                        if not username.strip() or not full_name.strip() or not password:
+                            st.error(
+                                "Nhập đủ thông tin."
+                            )
+                        else:
+                            try:
+                                upsert_rows(
+                                    "users",
+                                    [{
+                                        "username": username.strip(),
+                                        "password_hash": sha256(
+                                            password
+                                        ),
+                                        "full_name": full_name.strip(),
+                                        "role": role,
+                                        "department": department.strip(),
+                                        "position": position.strip(),
+                                        "active": True,
+                                    }],
+                                    "username",
+                                )
+                                st.success(
+                                    "✅ Đã tạo tài khoản."
+                                )
+                                st.rerun()
+                            except Exception as e:
+                                st.error(
+                                    "Không tạo được tài khoản."
+                                )
+                                st.code(
+                                    safe_error(e)
+                                )
+
+    with tab2:
+        employees = users[
+            users["role"] == "employee"
+        ] if not users.empty else pd.DataFrame()
 
         if employees.empty:
             st.info("Chưa có nhân viên.")
@@ -963,84 +1284,196 @@ def admin_page():
             label = st.selectbox(
                 "Nhân viên",
                 list(options.keys()),
-                key="payroll_user"
+                key="admin_schedule_user",
             )
+
             username = options[label]
 
             today = date.today()
+
             c1, c2 = st.columns(2)
 
             year = c1.number_input(
-                "Năm", 2020, 2100, today.year,
-                key="payroll_year"
-            )
-            month = c2.selectbox(
-                "Tháng", range(1, 13), today.month - 1,
-                key="payroll_month"
+                "Năm",
+                2020,
+                2100,
+                today.year,
+                key="admin_year",
             )
 
-            settings = get_shift_settings(
-                username, year, month
+            month = c2.selectbox(
+                "Tháng",
+                range(1, 13),
+                today.month - 1,
+                key="admin_month",
+            )
+
+            settings = monthly_settings_form(
+                username,
+                int(year),
+                int(month),
+            )
+
+            st.divider()
+
+            render_schedule_calendar(
+                username,
+                int(year),
+                int(month),
+                "admin",
+            )
+
+    with tab3:
+        employees = users[
+            users["role"] == "employee"
+        ] if not users.empty else pd.DataFrame()
+
+        if employees.empty:
+            st.info("Chưa có nhân viên.")
+        else:
+            options = {
+                f"{r['full_name']} ({r['username']})":
+                r["username"]
+                for _, r in employees.iterrows()
+            }
+
+            label = st.selectbox(
+                "Nhân viên",
+                list(options.keys()),
+                key="payroll_user",
+            )
+
+            username = options[label]
+
+            today = date.today()
+
+            c1, c2 = st.columns(2)
+
+            year = c1.number_input(
+                "Năm",
+                2020,
+                2100,
+                today.year,
+                key="pay_year",
+            )
+
+            month = c2.selectbox(
+                "Tháng",
+                range(1, 13),
+                today.month - 1,
+                key="pay_month",
+            )
+
+            settings = get_month_settings(
+                username,
+                int(year),
+                int(month),
             )
 
             if not settings:
                 st.warning(
-                    "Chưa có cấu hình tháng. Hãy nhập số giờ 3 ca "
-                    "và lương/giờ ở tab Xếp ca trên lịch."
+                    "Chưa có cấu hình tháng."
                 )
                 return
 
-            df = get_attendance_df(
-                username, year, month
+            df = get_month_attendance(
+                username,
+                int(year),
+                int(month),
             )
 
-            if df.empty:
-                total_shifts = 0
-                total_hours = 0.0
-            else:
+            if not df.empty:
                 df = df[df["_scheduled"]].copy()
-                total_shifts = len(df)
+
+            total_shifts = (
+                len(df)
+                if not df.empty
+                else 0
+            )
+
+            total_hours = 0.0
+
+            if not df.empty:
                 total_hours = sum(
-                    shift_hours(settings, str(s))
+                    shift_hours(
+                        settings,
+                        s,
+                    )
                     for s in df["shift"].tolist()
                 )
 
-            rate = float(settings.get("hourly_rate", 0) or 0)
-            salary = total_hours * rate
+            hourly_rate = float(
+                settings.get(
+                    "hourly_rate",
+                    0,
+                )
+            )
+
+            salary = (
+                total_hours
+                * hourly_rate
+            )
 
             a, b, c = st.columns(3)
-            a.metric("☑️ Tổng ca", total_shifts)
-            b.metric("⏱️ Tổng giờ", f"{total_hours:g} giờ")
-            c.metric("💵 Tổng lương", f"{salary:,.0f} đ")
+
+            a.metric(
+                "☑️ Tổng ca",
+                total_shifts,
+            )
+
+            b.metric(
+                "⏱️ Tổng giờ",
+                f"{total_hours:g} giờ",
+            )
+
+            c.metric(
+                "💵 Tổng lương",
+                f"{salary:,.0f} đ",
+            )
 
             if not df.empty:
                 rows = []
-                for _, r in df.iterrows():
-                    shift = str(r["shift"])
-                    hrs = shift_hours(settings, shift)
+
+                for _, row in df.iterrows():
+                    shift = str(row["shift"])
+                    hours = shift_hours(
+                        settings,
+                        shift,
+                    )
+
                     rows.append({
-                        "Ngày": str(r["work_date"])[:10],
+                        "Ngày": str(
+                            row["work_date"]
+                        )[:10],
                         "Ca": shift,
-                        "Số giờ": hrs,
-                        "Lương/giờ": rate,
-                        "Tiền ca": hrs * rate,
+                        "Số giờ": hours,
+                        "Lương/giờ": hourly_rate,
+                        "Tiền ca": (
+                            hours
+                            * hourly_rate
+                        ),
                     })
 
-                report = pd.DataFrame(rows)
+                report = pd.DataFrame(
+                    rows
+                )
+
                 st.dataframe(
                     report,
                     use_container_width=True,
-                    hide_index=True
+                    hide_index=True,
                 )
 
                 output = io.BytesIO()
+
                 with pd.ExcelWriter(
-                    output, engine="openpyxl"
+                    output,
+                    engine="openpyxl",
                 ) as writer:
                     report.to_excel(
                         writer,
                         index=False,
-                        sheet_name="BangLuong"
+                        sheet_name="BangLuong",
                     )
 
                 output.seek(0)
@@ -1056,7 +1489,7 @@ def admin_page():
                         "application/vnd.openxmlformats-officedocument."
                         "spreadsheetml.sheet"
                     ),
-                    use_container_width=True
+                    use_container_width=True,
                 )
 
 
