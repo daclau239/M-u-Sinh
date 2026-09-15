@@ -121,6 +121,25 @@ ON public.attendance(username, work_date, shift);
 
 CREATE INDEX IF NOT EXISTS monthly_wages_lookup_idx
 ON public.monthly_wages(username, year, month);
+
+-- Cấu hình cố định theo tháng:
+-- số giờ mỗi ca + lương/giờ. Nhập 1 lần/tháng.
+CREATE TABLE IF NOT EXISTS public.monthly_shift_settings (
+    id uuid primary key default gen_random_uuid(),
+    username text not null,
+    year integer not null,
+    month integer not null,
+    morning_hours numeric(8,2) not null default 4,
+    afternoon_hours numeric(8,2) not null default 4,
+    evening_hours numeric(8,2) not null default 4,
+    hourly_rate numeric(12,2) not null default 0,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    UNIQUE(username, year, month)
+);
+
+CREATE INDEX IF NOT EXISTS monthly_shift_settings_lookup_idx
+ON public.monthly_shift_settings(username, year, month);
 """
 
 # ============================================================
@@ -187,10 +206,16 @@ def insert_row(table, payload):
         prefer="return=representation"
     )
 
-def upsert_row(table, payload):
+def upsert_row(table, payload, on_conflict=None):
+    params = {}
+    if on_conflict:
+        params["on_conflict"] = on_conflict
     return sb_request(
-        "POST", table, payload=payload,
-        prefer="resolution=merge-duplicates,return=representation"
+        "POST",
+        table,
+        params=params,
+        payload=payload,
+        prefer="resolution=merge-duplicates,return=representation",
     )
 
 def update_rows(table, params, payload):
@@ -276,7 +301,7 @@ def save_shift(username, work_date, shift, scheduled, hours, note=""):
         "status": "Đã chấm" if scheduled else "",
         "note": note,
         "updated_at": datetime.utcnow().isoformat(),
-    })
+    }, on_conflict="username,work_date,shift")
 
 def delete_shift(username, work_date, shift):
     return delete_rows("attendance", {
@@ -296,13 +321,63 @@ def get_wage(username, year, month):
     return rows[0] if rows else None
 
 def save_wage(username, year, month, hourly_rate):
-    return upsert_row("monthly_wages", {
-        "username": username,
-        "year": int(year),
-        "month": int(month),
-        "hourly_rate": float(hourly_rate),
-        "updated_at": datetime.utcnow().isoformat(),
+    return upsert_row(
+        "monthly_wages",
+        {
+            "username": username,
+            "year": int(year),
+            "month": int(month),
+            "hourly_rate": float(hourly_rate),
+            "updated_at": datetime.utcnow().isoformat(),
+        },
+        on_conflict="username,year,month",
+    )
+
+def get_shift_settings(username, year, month):
+    rows = select_rows("monthly_shift_settings", {
+        "select": "*",
+        "username": f"eq.{username}",
+        "year": f"eq.{int(year)}",
+        "month": f"eq.{int(month)}",
+        "limit": "1",
     })
+    return rows[0] if rows else None
+
+
+def save_shift_settings(
+    username,
+    year,
+    month,
+    morning_hours,
+    afternoon_hours,
+    evening_hours,
+    hourly_rate,
+):
+    return upsert_row(
+        "monthly_shift_settings",
+        {
+            "username": username,
+            "year": int(year),
+            "month": int(month),
+            "morning_hours": float(morning_hours),
+            "afternoon_hours": float(afternoon_hours),
+            "evening_hours": float(evening_hours),
+            "hourly_rate": float(hourly_rate),
+            "updated_at": datetime.utcnow().isoformat(),
+        },
+        on_conflict="username,year,month",
+    )
+
+
+def shift_hours(settings, shift):
+    if not settings:
+        return 0.0
+    return float({
+        "Sáng": settings.get("morning_hours", 0),
+        "Chiều": settings.get("afternoon_hours", 0),
+        "Tối": settings.get("evening_hours", 0),
+    }.get(shift, 0) or 0)
+
 
 def authenticate(username, password):
     user = get_user(username.strip())
@@ -334,6 +409,7 @@ try:
     select_rows("users", {"select": "id", "limit": "1"})
     select_rows("attendance", {"select": "id,shift,hours,scheduled", "limit": "1"})
     select_rows("monthly_wages", {"select": "id", "limit": "1"})
+    select_rows("monthly_shift_settings", {"select": "id", "limit": "1"})
 except Exception as e:
     st.error("❌ Database chưa đủ cột/bảng cho phiên bản này.")
     st.code(safe_error(e))
@@ -501,11 +577,10 @@ def employee_page():
         unsafe_allow_html=True
     )
 
-    st.markdown(
-        "### 📅 Lịch làm việc"
-    )
+    st.markdown("### 📅 Lịch chấm công")
     st.caption(
-        "Chỉ cần **tích ca** trên lịch. Sau đó nhập số giờ thực tế cho các ca đã tích."
+        "Mỗi ngày có 3 ô ca. **Chỉ cần tích ☑️ ca đã làm** — "
+        "không phải nhập giờ từng ngày."
     )
 
     year, month, _ = render_calendar(
@@ -513,188 +588,145 @@ def employee_page():
         "emp_cal"
     )
 
+    settings = get_shift_settings(
+        current_user["username"], year, month
+    )
+
     st.divider()
+    st.subheader("⚙️ Cấu hình tháng")
 
-    st.subheader("⏱️ Nhập số giờ theo ca")
+    if settings:
+        st.success(
+            "Đã có cấu hình tháng. Thời gian ca và lương được dùng tự động "
+            "cho toàn bộ tháng này."
+        )
 
+    with st.form(f"monthly_settings_{year}_{month}"):
+        c1, c2, c3, c4 = st.columns(4)
+
+        morning = c1.number_input(
+            "☀️ Sáng (giờ)",
+            min_value=0.0,
+            max_value=24.0,
+            value=float(settings.get("morning_hours", 4) if settings else 4),
+            step=0.5,
+        )
+        afternoon = c2.number_input(
+            "🌤️ Chiều (giờ)",
+            min_value=0.0,
+            max_value=24.0,
+            value=float(settings.get("afternoon_hours", 4) if settings else 4),
+            step=0.5,
+        )
+        evening = c3.number_input(
+            "🌙 Tối (giờ)",
+            min_value=0.0,
+            max_value=24.0,
+            value=float(settings.get("evening_hours", 4) if settings else 4),
+            step=0.5,
+        )
+        rate = c4.number_input(
+            "💰 Lương / giờ",
+            min_value=0.0,
+            value=float(settings.get("hourly_rate", 0) if settings else 0),
+            step=1000.0,
+            format="%.0f",
+        )
+
+        save = st.form_submit_button(
+            "💾 LƯU CẤU HÌNH THÁNG",
+            use_container_width=True,
+        )
+
+        if save:
+            try:
+                save_shift_settings(
+                    current_user["username"],
+                    year,
+                    month,
+                    morning,
+                    afternoon,
+                    evening,
+                    rate,
+                )
+                st.success(
+                    "✅ Đã lưu. Từ giờ em chỉ cần tích ca trên lịch."
+                )
+                st.rerun()
+            except Exception as e:
+                st.error("Không lưu được cấu hình tháng.")
+                st.code(safe_error(e))
+
+    # Tổng hợp tự động từ các ca đã tích.
     df = get_attendance_df(
-        current_user["username"],
-        year,
-        month
-    )
-
-    if df.empty:
-        st.info("Chưa có ca nào được tích trong tháng này.")
-    else:
-        df["work_date"] = df["work_date"].astype(str).str[:10]
-        df = df[df["scheduled"] == True].copy()
-        df = df.sort_values(["work_date", "shift"])
-
-        if df.empty:
-            st.info("Chưa có ca nào được tích.")
-        else:
-            for _, r in df.iterrows():
-                ds = r["work_date"]
-                shift = r["shift"]
-                pretty = datetime.strptime(
-                    ds, "%Y-%m-%d"
-                ).strftime("%d/%m/%Y")
-
-                with st.container(border=True):
-                    c1, c2, c3 = st.columns([2, 2, 3])
-
-                    c1.markdown(
-                        f"**{pretty}**  \n"
-                        f"{SHIFT_ICONS.get(shift, '🕘')} **Ca {shift}**"
-                    )
-
-                    current_hours = float(r.get("hours", 0) or 0)
-
-                    hours = c2.number_input(
-                        "Số giờ",
-                        min_value=0.0,
-                        max_value=24.0,
-                        value=current_hours,
-                        step=0.5,
-                        key=f"hours_{ds}_{shift}",
-                    )
-
-                    note = c3.text_input(
-                        "Ghi chú",
-                        value=str(r.get("note", "") or ""),
-                        key=f"note_{ds}_{shift}",
-                    )
-
-                    if st.button(
-                        "💾 Lưu",
-                        key=f"save_{ds}_{shift}",
-                    ):
-                        try:
-                            save_shift(
-                                current_user["username"],
-                                ds,
-                                shift,
-                                True,
-                                hours,
-                                note,
-                            )
-                            st.success(
-                                f"Đã lưu {pretty} - ca {shift}."
-                            )
-                            st.rerun()
-                        except Exception as e:
-                            st.error(safe_error(e))
-
-    # --------------------------------------------------------
-    # LƯƠNG THÁNG
-    # --------------------------------------------------------
-    st.divider()
-    st.subheader("💰 Lương theo giờ")
-
-    wage = get_wage(
-        current_user["username"],
-        year,
-        month
-    )
-
-    old_rate = float(
-        wage.get("hourly_rate", 0) if wage else 0
-    )
-
-    c1, c2 = st.columns([2, 1])
-
-    rate = c1.number_input(
-        "Lương / giờ (nhập 1 lần cho tháng này)",
-        min_value=0.0,
-        value=old_rate,
-        step=1000.0,
-        format="%.0f",
-        key=f"rate_{year}_{month}",
-    )
-
-    if c2.button(
-        "💾 LƯU LƯƠNG THÁNG",
-        use_container_width=True
-    ):
-        try:
-            save_wage(
-                current_user["username"],
-                year,
-                month,
-                rate
-            )
-            st.success("Đã lưu mức lương tháng.")
-            st.rerun()
-        except Exception as e:
-            st.error(safe_error(e))
-
-    month_df = get_attendance_df(
-        current_user["username"],
-        year,
-        month
+        current_user["username"], year, month
     )
 
     total_hours = 0.0
-    if not month_df.empty:
-        month_df = month_df[month_df["scheduled"] == True]
-        total_hours = float(
-            pd.to_numeric(
-                month_df["hours"],
-                errors="coerce"
-            ).fillna(0).sum()
+    total_shifts = 0
+
+    if not df.empty:
+        df = df[df["scheduled"] == True].copy()
+        total_shifts = len(df)
+        total_hours = sum(
+            shift_hours(settings, str(shift))
+            for shift in df["shift"].tolist()
         )
 
-    salary = total_hours * rate
+    salary = total_hours * float(rate)
 
-    a, b = st.columns(2)
-    a.metric("⏱️ Tổng giờ", f"{total_hours:g} giờ")
-    b.metric("💵 Tổng lương", f"{salary:,.0f} đ")
+    a, b, c = st.columns(3)
+    a.metric("☑️ Tổng ca", total_shifts)
+    b.metric("⏱️ Tổng giờ", f"{total_hours:g} giờ")
+    c.metric("💵 Tổng lương", f"{salary:,.0f} đ")
 
-    # Excel
     st.divider()
-    if not month_df.empty:
-        export = month_df[[
-            "work_date",
-            "shift",
-            "hours",
-            "status",
-            "note"
-        ]].copy()
+    st.subheader("📋 Chi tiết ca đã tích")
 
-        export["work_date"] = export["work_date"].astype(str).str[:10]
-        export = export.rename(columns={
-            "work_date": "Ngày",
-            "shift": "Ca",
-            "hours": "Số giờ",
-            "status": "Trạng thái",
-            "note": "Ghi chú",
+    if df.empty:
+        st.info("Chưa tích ca nào trong tháng.")
+        return
+
+    rows = []
+    for _, r in df.iterrows():
+        shift = str(r["shift"])
+        hrs = shift_hours(settings, shift)
+        rows.append({
+            "Ngày": datetime.strptime(
+                str(r["work_date"])[:10], "%Y-%m-%d"
+            ).strftime("%d/%m/%Y"),
+            "Ca": shift,
+            "Số giờ cố định": hrs,
+            "Lương/giờ": rate,
+            "Tiền ca": hrs * float(rate),
         })
 
-        export["Lương/giờ"] = rate
-        export["Tiền lương"] = export["Số giờ"] * rate
+    report = pd.DataFrame(rows)
+    st.dataframe(
+        report,
+        use_container_width=True,
+        hide_index=True
+    )
 
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            export.to_excel(
-                writer,
-                index=False,
-                sheet_name="BangCong"
-            )
-
-        output.seek(0)
-
-        st.download_button(
-            "⬇️ XUẤT BẢNG CÔNG + LƯƠNG",
-            output.getvalue(),
-            file_name=(
-                f"Bang_cong_luong_{year}_{month:02d}.xlsx"
-            ),
-            mime=(
-                "application/vnd.openxmlformats-officedocument."
-                "spreadsheetml.sheet"
-            ),
-            use_container_width=True
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        report.to_excel(
+            writer,
+            index=False,
+            sheet_name="BangCong"
         )
+    output.seek(0)
+
+    st.download_button(
+        "⬇️ XUẤT BẢNG CÔNG + LƯƠNG",
+        output.getvalue(),
+        file_name=f"Bang_cong_{year}_{month:02d}.xlsx",
+        mime=(
+            "application/vnd.openxmlformats-officedocument."
+            "spreadsheetml.sheet"
+        ),
+        use_container_width=True,
+    )
 
 # ============================================================
 # ADMIN
@@ -713,9 +745,6 @@ def admin_page():
         "💰 Bảng lương",
     ])
 
-    # --------------------------------------------------------
-    # USERS
-    # --------------------------------------------------------
     with tab1:
         if users.empty:
             st.info("Chưa có tài khoản.")
@@ -745,13 +774,11 @@ def admin_page():
                 hide_index=True,
             )
 
-    # --------------------------------------------------------
-    # ADMIN SCHEDULE
-    # --------------------------------------------------------
     with tab2:
-        employees = users[
-            users["role"] == "employee"
-        ] if not users.empty else pd.DataFrame()
+        employees = (
+            users[users["role"] == "employee"]
+            if not users.empty else pd.DataFrame()
+        )
 
         if employees.empty:
             st.info("Chưa có nhân viên.")
@@ -767,172 +794,190 @@ def admin_page():
                 list(options.keys()),
                 key="admin_schedule_user"
             )
-
             username = options[label]
 
             st.info(
-                "Tích ☀️ Sáng / 🌤️ Chiều / 🌙 Tối trực tiếp trên lịch "
-                "để xếp ca cho nhân viên."
+                "Tích ☀️ Sáng / 🌤️ Chiều / 🌙 Tối trực tiếp trên lịch. "
+                "Ca đã tích sẽ được tính theo số giờ cố định của tháng."
             )
 
-            render_calendar(
+            year, month, _ = render_calendar(
                 username,
                 "admin_cal"
             )
 
-    # --------------------------------------------------------
-    # PAYROLL
-    # --------------------------------------------------------
+            settings = get_shift_settings(
+                username, year, month
+            )
+
+            st.subheader("⚙️ Cấu hình tháng cho nhân viên")
+
+            with st.form(f"admin_month_settings_{username}_{year}_{month}"):
+                c1, c2, c3, c4 = st.columns(4)
+
+                morning = c1.number_input(
+                    "☀️ Sáng (giờ)",
+                    min_value=0.0,
+                    max_value=24.0,
+                    value=float(settings.get("morning_hours", 4) if settings else 4),
+                    step=0.5,
+                )
+                afternoon = c2.number_input(
+                    "🌤️ Chiều (giờ)",
+                    min_value=0.0,
+                    max_value=24.0,
+                    value=float(settings.get("afternoon_hours", 4) if settings else 4),
+                    step=0.5,
+                )
+                evening = c3.number_input(
+                    "🌙 Tối (giờ)",
+                    min_value=0.0,
+                    max_value=24.0,
+                    value=float(settings.get("evening_hours", 4) if settings else 4),
+                    step=0.5,
+                )
+                rate = c4.number_input(
+                    "💰 Lương / giờ",
+                    min_value=0.0,
+                    value=float(settings.get("hourly_rate", 0) if settings else 0),
+                    step=1000.0,
+                    format="%.0f",
+                )
+
+                if st.form_submit_button(
+                    "💾 LƯU CẤU HÌNH THÁNG",
+                    use_container_width=True,
+                ):
+                    try:
+                        save_shift_settings(
+                            username,
+                            year,
+                            month,
+                            morning,
+                            afternoon,
+                            evening,
+                            rate,
+                        )
+                        st.success("✅ Đã lưu cấu hình tháng.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error("Không lưu được.")
+                        st.code(safe_error(e))
+
     with tab3:
-        employees = users[
-            users["role"] == "employee"
-        ] if not users.empty else pd.DataFrame()
+        employees = (
+            users[users["role"] == "employee"]
+            if not users.empty else pd.DataFrame()
+        )
 
         if employees.empty:
             st.info("Chưa có nhân viên.")
-            return
-
-        options = {
-            f"{r['full_name']} ({r['username']})":
-            r["username"]
-            for _, r in employees.iterrows()
-        }
-
-        label = st.selectbox(
-            "Nhân viên",
-            list(options.keys()),
-            key="payroll_user"
-        )
-        username = options[label]
-
-        c1, c2 = st.columns(2)
-
-        today = date.today()
-
-        year = c1.number_input(
-            "Năm",
-            2020,
-            2100,
-            today.year,
-            key="payroll_year"
-        )
-
-        month = c2.selectbox(
-            "Tháng",
-            range(1, 13),
-            today.month - 1,
-            key="payroll_month"
-        )
-
-        wage = get_wage(username, year, month)
-        rate = float(
-            wage.get("hourly_rate", 0)
-            if wage else 0
-        )
-
-        c1, c2 = st.columns([2, 1])
-
-        new_rate = c1.number_input(
-            "Lương / giờ",
-            min_value=0.0,
-            value=rate,
-            step=1000.0,
-            format="%.0f",
-            key="admin_rate"
-        )
-
-        if c2.button(
-            "💾 LƯU",
-            use_container_width=True
-        ):
-            try:
-                save_wage(
-                    username,
-                    year,
-                    month,
-                    new_rate
-                )
-                st.success("Đã lưu lương theo giờ.")
-                st.rerun()
-            except Exception as e:
-                st.error(safe_error(e))
-
-        df = get_attendance_df(
-            username,
-            year,
-            month
-        )
-
-        if df.empty:
-            total_hours = 0.0
-            st.info("Chưa có ca.")
         else:
-            df = df[df["scheduled"] == True].copy()
-            total_hours = float(
-                pd.to_numeric(
-                    df["hours"],
-                    errors="coerce"
-                ).fillna(0).sum()
+            options = {
+                f"{r['full_name']} ({r['username']})":
+                r["username"]
+                for _, r in employees.iterrows()
+            }
+
+            label = st.selectbox(
+                "Nhân viên",
+                list(options.keys()),
+                key="payroll_user"
+            )
+            username = options[label]
+
+            today = date.today()
+            c1, c2 = st.columns(2)
+
+            year = c1.number_input(
+                "Năm", 2020, 2100, today.year,
+                key="payroll_year"
+            )
+            month = c2.selectbox(
+                "Tháng", range(1, 13), today.month - 1,
+                key="payroll_month"
             )
 
-            report = df[[
-                "work_date",
-                "shift",
-                "hours",
-                "note"
-            ]].copy()
-
-            report = report.rename(columns={
-                "work_date": "Ngày",
-                "shift": "Ca",
-                "hours": "Số giờ",
-                "note": "Ghi chú",
-            })
-
-            report["Lương/giờ"] = new_rate
-            report["Tiền lương"] = (
-                report["Số giờ"] * new_rate
+            settings = get_shift_settings(
+                username, year, month
             )
 
-            st.dataframe(
-                report,
-                use_container_width=True,
-                hide_index=True
+            if not settings:
+                st.warning(
+                    "Chưa có cấu hình tháng. Hãy nhập số giờ 3 ca "
+                    "và lương/giờ ở tab Xếp ca trên lịch."
+                )
+                return
+
+            df = get_attendance_df(
+                username, year, month
             )
 
-        salary = total_hours * new_rate
-
-        a, b = st.columns(2)
-        a.metric("⏱️ Tổng giờ", f"{total_hours:g} giờ")
-        b.metric("💵 Tổng lương", f"{salary:,.0f} đ")
-
-        if not df.empty:
-            output = io.BytesIO()
-            with pd.ExcelWriter(
-                output,
-                engine="openpyxl"
-            ) as writer:
-                report.to_excel(
-                    writer,
-                    index=False,
-                    sheet_name="BangLuong"
+            if df.empty:
+                total_shifts = 0
+                total_hours = 0.0
+            else:
+                df = df[df["scheduled"] == True].copy()
+                total_shifts = len(df)
+                total_hours = sum(
+                    shift_hours(settings, str(s))
+                    for s in df["shift"].tolist()
                 )
 
-            output.seek(0)
+            rate = float(settings.get("hourly_rate", 0) or 0)
+            salary = total_hours * rate
 
-            st.download_button(
-                "⬇️ XUẤT BẢNG LƯƠNG",
-                output.getvalue(),
-                file_name=(
-                    f"Luong_{username}_"
-                    f"{year}_{month:02d}.xlsx"
-                ),
-                mime=(
-                    "application/vnd.openxmlformats-officedocument."
-                    "spreadsheetml.sheet"
-                ),
-                use_container_width=True
-            )
+            a, b, c = st.columns(3)
+            a.metric("☑️ Tổng ca", total_shifts)
+            b.metric("⏱️ Tổng giờ", f"{total_hours:g} giờ")
+            c.metric("💵 Tổng lương", f"{salary:,.0f} đ")
+
+            if not df.empty:
+                rows = []
+                for _, r in df.iterrows():
+                    shift = str(r["shift"])
+                    hrs = shift_hours(settings, shift)
+                    rows.append({
+                        "Ngày": str(r["work_date"])[:10],
+                        "Ca": shift,
+                        "Số giờ": hrs,
+                        "Lương/giờ": rate,
+                        "Tiền ca": hrs * rate,
+                    })
+
+                report = pd.DataFrame(rows)
+                st.dataframe(
+                    report,
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+                output = io.BytesIO()
+                with pd.ExcelWriter(
+                    output, engine="openpyxl"
+                ) as writer:
+                    report.to_excel(
+                        writer,
+                        index=False,
+                        sheet_name="BangLuong"
+                    )
+
+                output.seek(0)
+
+                st.download_button(
+                    "⬇️ XUẤT BẢNG LƯƠNG",
+                    output.getvalue(),
+                    file_name=(
+                        f"Luong_{username}_"
+                        f"{year}_{month:02d}.xlsx"
+                    ),
+                    mime=(
+                        "application/vnd.openxmlformats-officedocument."
+                        "spreadsheetml.sheet"
+                    ),
+                    use_container_width=True
+                )
+
 
 # ============================================================
 # RUN
