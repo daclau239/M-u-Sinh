@@ -1,2 +1,7 @@
 streamlit>=1.40,<2.0
 supabase>=2.10,<3.0
+streamlit
+pandas
+openpyxl
+Pillow
+requests
