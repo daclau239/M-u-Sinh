@@ -336,12 +336,23 @@ try:
         },
     )
 except Exception as e:
-    st.error("❌ Không đọc được bảng attendance.")
+    st.error("❌ Bảng attendance chưa được nâng cấp lên cơ chế 3 ca.")
     st.code(safe_error(e))
-    st.markdown(
-        "Nếu đây là bản app 3 ca đầu tiên, hãy chạy SQL migration "
-        "ở phần hướng dẫn bên trên trong Supabase SQL Editor."
-    )
+    st.markdown("""
+### Cách sửa
+
+Vào **Supabase → SQL Editor → New query**, dán toàn bộ file
+`migration_cham_cong_3_ca.sql` rồi bấm **Run**.
+
+Migration này:
+- thêm cột `shift`
+- giữ dữ liệu cũ
+- chuyển dữ liệu cũ thành **ca Sáng**
+- cho phép mỗi nhân viên có **3 ca/ngày**
+- tạo khóa duy nhất theo **nhân viên + ngày + ca**
+
+Sau khi Run thành công, quay lại Streamlit và **Reboot app**.
+""")
     st.stop()
 
 # ============================================================
