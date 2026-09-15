@@ -262,22 +262,33 @@ def get_attendance_df(username=None, year=None, month=None):
         "order": "work_date.asc,shift.asc",
     }
 
-    filters = []
-
     if username:
-        filters.append(("username", f"eq.{username}"))
+        params["username"] = f"eq.{username}"
+
+    rows = select_rows("attendance", params)
+    df = pd.DataFrame(rows)
+
+    if df.empty:
+        return df
+
+    df["work_date"] = df["work_date"].astype(str).str[:10]
 
     if year is not None and month is not None:
-        first = f"{int(year):04d}-{int(month):02d}-01"
-        last_day = calendar.monthrange(int(year), int(month))[1]
-        last = f"{int(year):04d}-{int(month):02d}-{last_day:02d}"
-        filters.append(("work_date", f"gte.{first}"))
-        filters.append(("work_date", f"lte.{last}"))
+        prefix = f"{int(year):04d}-{int(month):02d}-"
+        df = df[df["work_date"].str.startswith(prefix)].copy()
 
-    for key, value in filters:
-        params[key] = value
+    if "scheduled" in df.columns:
+        df["_scheduled"] = df["scheduled"].map(
+            lambda x: x if isinstance(x, bool)
+            else str(x).strip().lower() in ("true", "1", "yes")
+        )
+    else:
+        df["_scheduled"] = False
 
-    return pd.DataFrame(select_rows("attendance", params))
+    if "hours" in df.columns:
+        df["hours"] = pd.to_numeric(df["hours"], errors="coerce").fillna(0.0)
+
+    return df
 
 def get_shift(username, work_date, shift):
     rows = select_rows("attendance", {
@@ -288,6 +299,51 @@ def get_shift(username, work_date, shift):
         "limit": "1",
     })
     return rows[0] if rows else None
+
+def sync_month_schedule(username, year, month, selected_cells, settings):
+    # Get all saved rows for this month.
+    current = get_attendance_df(username, year, month)
+    existing = set()
+
+    if not current.empty:
+        for _, r in current.iterrows():
+            if bool(r.get("_scheduled", False)):
+                existing.add((str(r["work_date"]), str(r.get("shift", ""))))
+
+    desired_rows = []
+    desired = set()
+
+    for (work_date, shift), checked in selected_cells.items():
+        if checked:
+            desired.add((work_date, shift))
+            desired_rows.append({
+                "username": username,
+                "work_date": work_date,
+                "shift": shift,
+                "scheduled": True,
+                "hours": shift_hours(settings, shift),
+                "check_in": "",
+                "check_out": "",
+                "status": "Đã xếp ca",
+                "note": "",
+                "updated_at": datetime.utcnow().isoformat(),
+            })
+
+    # One request for all checked cells.
+    if desired_rows:
+        sb_request(
+            "POST",
+            "attendance",
+            params={"on_conflict": "username,work_date,shift"},
+            payload=desired_rows,
+            prefer="resolution=merge-duplicates,return=minimal",
+        )
+
+    # Delete only rows that were previously saved but now unticked.
+    for work_date, shift in (existing - desired):
+        delete_shift(username, work_date, shift)
+
+    return len(desired_rows)
 
 def save_shift(username, work_date, shift, scheduled, hours, note=""):
     return upsert_row("attendance", {
@@ -367,18 +423,6 @@ def save_shift_settings(
         },
         on_conflict="username,year,month",
     )
-
-
-def selected_shift_df(df):
-    if df.empty:
-        return df
-    tmp = df.copy()
-    # JSON booleans arrive from Supabase as real bools, but normalize safely.
-    tmp["_scheduled"] = tmp["scheduled"].map(
-        lambda x: bool(x) if isinstance(x, bool)
-        else str(x).strip().lower() in ("true", "1", "yes")
-    )
-    return tmp[tmp["_scheduled"]].copy()
 
 
 def shift_hours(settings, shift):
@@ -505,40 +549,35 @@ def render_calendar(username, key_prefix):
     )
 
     df = get_attendance_df(username, int(year), int(month))
-    records = {}
+    saved = {}
 
     if not df.empty:
-        df["work_date"] = df["work_date"].astype(str).str[:10]
-
         for _, r in df.iterrows():
-            ds = r["work_date"]
-            records.setdefault(ds, {})[str(r.get("shift", "Sáng"))] = r.to_dict()
+            if bool(r.get("_scheduled", False)):
+                saved[(str(r["work_date"]), str(r.get("shift", "Sáng")))] = True
 
     st.caption(
-        "☑️ Tích các ca muốn làm → bấm **Lưu lịch tháng** một lần. "
-        "Từ đó hệ thống mới ghi toàn bộ ca vào database."
+        "☑️ Tích ca trên toàn bộ tháng → bấm **💾 LƯU LỊCH THÁNG** một lần."
     )
 
     weeks = calendar.Calendar(firstweekday=0).monthdayscalendar(
         int(year), int(month)
     )
-
     weekdays = ["T2", "T3", "T4", "T5", "T6", "T7", "CN"]
 
     head = st.columns(7)
     for i, w in enumerate(weekdays):
         head[i].markdown(
             f"<div style='text-align:center;font-weight:700'>{w}</div>",
-            unsafe_allow_html=True
+            unsafe_allow_html=True,
         )
 
-    # IMPORTANT:
-    # One form for the whole month. Checkbox values are collected first,
-    # then persisted only when the user presses "Lưu lịch tháng".
-    with st.form(f"{key_prefix}_calendar_form"):
+    # ONE form contains every checkbox in the whole month.
+    # Streamlit only commits the changes when the button is submitted,
+    # preventing partial saving after each checkbox rerun.
+    selected = {}
 
-        selected = {}
-
+    with st.form(f"{key_prefix}_month_form", clear_on_submit=False):
         for week in weeks:
             cols = st.columns(7)
 
@@ -547,85 +586,68 @@ def render_calendar(username, key_prefix):
                     if day == 0:
                         st.markdown(
                             "<div style='min-height:150px'></div>",
-                            unsafe_allow_html=True
+                            unsafe_allow_html=True,
                         )
                         continue
 
-                    ds = f"{int(year):04d}-{int(month):02d}-{day:02d}"
-                    day_records = records.get(ds, {})
+                    ds = (
+                        f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
+                    )
 
                     st.markdown(
                         f"<div class='day-number'>{day}</div>",
-                        unsafe_allow_html=True
+                        unsafe_allow_html=True,
                     )
 
                     for shift in SHIFTS:
-                        rec = day_records.get(shift)
-                        checked = bool(
-                            rec and rec.get("scheduled", False)
-                        )
-
                         selected[(ds, shift)] = st.checkbox(
                             f"{SHIFT_ICONS[shift]} {shift}",
-                            value=checked,
+                            value=((ds, shift) in saved),
                             key=f"{key_prefix}_cb_{ds}_{shift}",
                         )
 
-        save_calendar = st.form_submit_button(
+                    st.markdown(
+                        "<hr style='margin:5px 0 8px;border:none;"
+                        "border-top:1px solid #eee'>",
+                        unsafe_allow_html=True,
+                    )
+
+        submit = st.form_submit_button(
             "💾 LƯU LỊCH THÁNG",
             use_container_width=True,
         )
 
-        if save_calendar:
-            try:
-                # Save every checked cell.
-                # Unchecked cells are removed from the month's schedule.
-                for (ds, shift), checked in selected.items():
-                    existing = records.get(ds, {}).get(shift)
+    if submit:
+        try:
+            settings = get_shift_settings(username, int(year), int(month))
+            if settings is None:
+                settings = {
+                    "morning_hours": 0,
+                    "afternoon_hours": 0,
+                    "evening_hours": 0,
+                }
 
-                    if checked:
-                        old_hours = float(
-                            existing.get("hours", 0)
-                            if existing else 0
-                        )
-                        old_note = (
-                            existing.get("note", "")
-                            if existing else ""
-                        )
+            saved_count = sync_month_schedule(
+                username,
+                int(year),
+                int(month),
+                selected,
+                settings,
+            )
 
-                        save_shift(
-                            username,
-                            ds,
-                            shift,
-                            True,
-                            old_hours,
-                            old_note,
-                        )
-                    else:
-                        # Only delete if there was a saved record.
-                        if existing:
-                            delete_shift(
-                                username,
-                                ds,
-                                shift,
-                            )
+            verify = get_attendance_df(username, int(year), int(month))
+            verify_count = int(verify["_scheduled"].sum()) if not verify.empty else 0
 
-                st.success(
-                    f"✅ Đã lưu toàn bộ lịch tháng {int(month):02d}/{int(year)}."
-                )
-                st.rerun()
+            st.success(
+                f"✅ Đã lưu {saved_count} ca. "
+                f"Database hiện có {verify_count} ca cho tháng {int(month):02d}/{int(year)}."
+            )
+            st.rerun()
+        except Exception as e:
+            st.error("❌ Không thể lưu toàn bộ lịch tháng.")
+            st.code(safe_error(e))
 
-            except Exception as e:
-                st.error("❌ Không lưu được lịch tháng.")
-                st.code(safe_error(e))
-
-    # Selected day is kept for compatibility with the rest of the app.
-    selected_date = st.session_state.get(
-        f"{key_prefix}_selected_date",
-        today.isoformat()
-    )
-
-    return int(year), int(month), selected_date
+    return int(year), int(month), today.isoformat()
 
 # ============================================================
 # EMPLOYEE
@@ -725,7 +747,7 @@ def employee_page():
     total_shifts = 0
 
     if not df.empty:
-        df = selected_shift_df(df)
+        df = df[df["_scheduled"]].copy()
         total_shifts = len(df)
         total_hours = sum(
             shift_hours(settings, str(shift))
@@ -976,7 +998,7 @@ def admin_page():
                 total_shifts = 0
                 total_hours = 0.0
             else:
-                df = df[df["scheduled"] == True].copy()
+                df = df[df["_scheduled"]].copy()
                 total_shifts = len(df)
                 total_hours = sum(
                     shift_hours(settings, str(s))
