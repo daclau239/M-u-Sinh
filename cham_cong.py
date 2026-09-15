@@ -434,21 +434,10 @@ def render_calendar(username, key_prefix):
         key=f"{key_prefix}_month",
     )
 
-    data = calendar_statuses(
-        username,
-        int(year),
-        int(month),
-    )
-
-    month_cal = calendar.Calendar(firstweekday=0)
-    weeks = month_cal.monthdayscalendar(
-        int(year),
-        int(month),
-    )
+    data = calendar_statuses(username, int(year), int(month))
 
     st.caption(
-        "✅ Đi làm  |  🟦 Nghỉ phép  |  ❌ Nghỉ  |  "
-        "🟡 Đi trễ  |  🟠 Về sớm  |  ⬜ Chưa chấm"
+        "Bấm trực tiếp vào **Sáng / Chiều / Tối** của ngày muốn chấm."
     )
 
     weekdays = ["T2", "T3", "T4", "T5", "T6", "T7", "CN"]
@@ -456,201 +445,195 @@ def render_calendar(username, key_prefix):
 
     for i, w in enumerate(weekdays):
         header_cols[i].markdown(
-            f"**{w}**"
+            f"<div style='text-align:center;font-weight:700'>{w}</div>",
+            unsafe_allow_html=True,
         )
 
-    for week_index, week in enumerate(weeks):
+    month_cal = calendar.Calendar(firstweekday=0)
+    weeks = month_cal.monthdayscalendar(int(year), int(month))
+
+    for week in weeks:
         cols = st.columns(7)
 
         for col_index, day in enumerate(week):
             with cols[col_index]:
                 if day == 0:
-                    st.write("")
+                    st.markdown("<div style='height:112px'></div>", unsafe_allow_html=True)
                     continue
 
                 ds = f"{int(year):04d}-{int(month):02d}-{day:02d}"
                 day_data = data.get(ds, {})
 
-                s1 = shift_icon(day_data.get("Sáng"))
-                s2 = shift_icon(day_data.get("Chiều"))
-                s3 = shift_icon(day_data.get("Tối"))
-
-                label = (
-                    f"**{day}**\n\n"
-                    f"S {s1}  C {s2}  T {s3}"
+                st.markdown(
+                    f"<div style='font-weight:800;font-size:16px;margin-bottom:4px'>"
+                    f"{day}</div>",
+                    unsafe_allow_html=True,
                 )
 
-                if st.button(
-                    label,
-                    key=f"{key_prefix}_{ds}",
-                    use_container_width=True,
-                ):
-                    st.session_state[
-                        f"{key_prefix}_selected_date"
-                    ] = ds
-                    st.rerun()
+                for shift, short in [
+                    ("Sáng", "☀️ Sáng"),
+                    ("Chiều", "🌤️ Chiều"),
+                    ("Tối", "🌙 Tối"),
+                ]:
+                    record = day_data.get(shift)
+                    icon = shift_icon(record)
 
-    return (
-        int(year),
-        int(month),
-        st.session_state.get(
-            f"{key_prefix}_selected_date",
-            today.isoformat()
-            if today.year == int(year) and today.month == int(month)
-            else f"{int(year):04d}-{int(month):02d}-01",
-        ),
+                    if st.button(
+                        f"{icon} {short}",
+                        key=f"{key_prefix}_{ds}_{shift}",
+                        use_container_width=True,
+                    ):
+                        st.session_state[f"{key_prefix}_selected_date"] = ds
+                        st.session_state[f"{key_prefix}_selected_shift"] = shift
+                        st.rerun()
+
+                st.markdown(
+                    "<hr style='margin:4px 0 8px;border:none;border-top:1px solid #eee'>",
+                    unsafe_allow_html=True,
+                )
+
+    selected_date = st.session_state.get(
+        f"{key_prefix}_selected_date",
+        today.isoformat()
+        if today.year == int(year) and today.month == int(month)
+        else f"{int(year):04d}-{int(month):02d}-01",
     )
+
+    selected_shift = st.session_state.get(
+        f"{key_prefix}_selected_shift",
+        "Sáng",
+    )
+
+    return int(year), int(month), selected_date, selected_shift
 
 # ============================================================
 # EMPLOYEE
 # ============================================================
 def employee_page():
     st.markdown(
-        f'<div class="main-title">'
-        f'Xin chào, {current_user["full_name"]} 👋'
-        f'</div>',
+        f'<div class="main-title">Xin chào, {current_user["full_name"]} 👋</div>',
         unsafe_allow_html=True,
     )
 
     st.caption(
-        "Bấm vào một ngày trên lịch để chấm 3 ca: Sáng · Chiều · Tối."
+        "📅 Chọn đúng **ô ca Sáng / Chiều / Tối** trên lịch để chấm công."
     )
 
-    year, month, selected_date = render_calendar(
+    year, month, selected_date, selected_shift = render_calendar(
         current_user["username"],
         "employee_calendar",
     )
 
     st.divider()
 
+    pretty_date = datetime.strptime(
+        selected_date, "%Y-%m-%d"
+    ).strftime("%d/%m/%Y")
+
     st.subheader(
-        f"📅 Chấm công ngày "
-        f"{datetime.strptime(selected_date, '%Y-%m-%d').strftime('%d/%m/%Y')}"
+        f"{'☀️' if selected_shift == 'Sáng' else '🌤️' if selected_shift == 'Chiều' else '🌙'} "
+        f"Ca {selected_shift} — {pretty_date}"
     )
 
-    # 3 ca hiển thị cùng lúc.
-    for shift in SHIFTS:
-        record = get_day_shift(
-            current_user["username"],
-            selected_date,
-            shift,
+    record = get_day_shift(
+        current_user["username"],
+        selected_date,
+        selected_shift,
+    )
+
+    with st.form(
+        f"employee_shift_form_{selected_date}_{selected_shift}"
+    ):
+        c1, c2 = st.columns(2)
+
+        default_in = datetime.now().time()
+        default_out = datetime.now().time()
+
+        if record:
+            try:
+                if record.get("check_in"):
+                    default_in = datetime.strptime(
+                        record["check_in"], "%H:%M"
+                    ).time()
+                if record.get("check_out"):
+                    default_out = datetime.strptime(
+                        record["check_out"], "%H:%M"
+                    ).time()
+            except Exception:
+                pass
+
+        check_in = c1.time_input(
+            "🟢 Giờ vào",
+            value=default_in,
+        )
+        check_out = c2.time_input(
+            "🔴 Giờ ra",
+            value=default_out,
         )
 
-        icon = shift_icon(record)
+        old_status = record.get("status") if record else None
 
-        with st.expander(
-            f"{icon} CA {shift.upper()}",
-            expanded=True,
-        ):
-            with st.form(
-                f"employee_{selected_date}_{shift}"
-            ):
-                c1, c2 = st.columns(2)
+        status = st.selectbox(
+            "Trạng thái",
+            STATUSES,
+            index=(
+                STATUSES.index(old_status)
+                if old_status in STATUSES
+                else 0
+            ),
+        )
 
-                default_in = datetime.now().time()
-                default_out = datetime.now().time()
+        note = st.text_input(
+            "Ghi chú",
+            value=(record or {}).get("note", ""),
+        )
 
-                if record:
-                    try:
-                        if record.get("check_in"):
-                            default_in = datetime.strptime(
-                                record["check_in"],
-                                "%H:%M",
-                            ).time()
-                        if record.get("check_out"):
-                            default_out = datetime.strptime(
-                                record["check_out"],
-                                "%H:%M",
-                            ).time()
-                    except Exception:
-                        pass
+        a, b = st.columns(2)
 
-                check_in = c1.time_input(
-                    "Giờ vào",
-                    value=default_in,
-                    key=f"in_{selected_date}_{shift}",
+        save = a.form_submit_button(
+            f"💾 LƯU CA {selected_shift.upper()}",
+            use_container_width=True,
+        )
+
+        delete = b.form_submit_button(
+            "🗑️ XÓA CA",
+            use_container_width=True,
+        )
+
+        if save:
+            try:
+                save_shift(
+                    current_user["username"],
+                    selected_date,
+                    selected_shift,
+                    check_in.strftime("%H:%M"),
+                    check_out.strftime("%H:%M"),
+                    status,
+                    note,
                 )
-                check_out = c2.time_input(
-                    "Giờ ra",
-                    value=default_out,
-                    key=f"out_{selected_date}_{shift}",
+                st.success(
+                    f"✅ Đã lưu ca {selected_shift} ngày {pretty_date}."
                 )
+                st.rerun()
+            except Exception as e:
+                st.error("Không lưu được ca.")
+                st.code(safe_error(e))
 
-                current_status = (
-                    record.get("status")
-                    if record
-                    else None
+        if delete:
+            try:
+                delete_shift(
+                    current_user["username"],
+                    selected_date,
+                    selected_shift,
                 )
-
-                status = st.selectbox(
-                    "Trạng thái",
-                    STATUSES,
-                    index=(
-                        STATUSES.index(current_status)
-                        if current_status in STATUSES
-                        else 0
-                    ),
-                    key=f"status_{selected_date}_{shift}",
+                st.success(
+                    f"🗑️ Đã xóa ca {selected_shift}."
                 )
+                st.rerun()
+            except Exception as e:
+                st.error("Không xóa được ca.")
+                st.code(safe_error(e))
 
-                note = st.text_input(
-                    "Ghi chú",
-                    value=(record or {}).get("note", ""),
-                    key=f"note_{selected_date}_{shift}",
-                )
-
-                a, b = st.columns(2)
-
-                save = a.form_submit_button(
-                    "💾 LƯU CA",
-                    use_container_width=True,
-                )
-                delete = b.form_submit_button(
-                    "🗑️ XÓA CA",
-                    use_container_width=True,
-                )
-
-                if save:
-                    try:
-                        save_shift(
-                            current_user["username"],
-                            selected_date,
-                            shift,
-                            check_in.strftime("%H:%M"),
-                            check_out.strftime("%H:%M"),
-                            status,
-                            note,
-                        )
-                        st.success(
-                            f"✅ Đã lưu ca {shift}."
-                        )
-                        st.rerun()
-                    except Exception as e:
-                        st.error(
-                            f"Không lưu được ca {shift}."
-                        )
-                        st.code(safe_error(e))
-
-                if delete:
-                    try:
-                        delete_shift(
-                            current_user["username"],
-                            selected_date,
-                            shift,
-                        )
-                        st.success(
-                            f"🗑️ Đã xóa ca {shift}."
-                        )
-                        st.rerun()
-                    except Exception as e:
-                        st.error(
-                            f"Không xóa được ca {shift}."
-                        )
-                        st.code(safe_error(e))
-
-    # --------------------------------------------------------
-    # BẢNG CÔNG 3 CA DẠNG EXCEL
-    # --------------------------------------------------------
     st.divider()
     st.subheader("📊 Bảng công tháng")
 
@@ -670,32 +653,26 @@ def employee_page():
         else:
             month_df = pd.DataFrame()
 
-        show = []
-
+        rows = []
         total_days = calendar.monthrange(year, month)[1]
 
         for d in range(1, total_days + 1):
             ds = f"{year:04d}-{month:02d}-{d:02d}"
-            day_rows = (
-                month_df[month_df["work_date"] == ds]
-                if not month_df.empty
-                else pd.DataFrame()
-            )
 
             for shift in SHIFTS:
                 r = (
-                    day_rows[day_rows["shift"] == shift]
-                    if not day_rows.empty
+                    month_df[
+                        (month_df["work_date"] == ds)
+                        & (month_df["shift"] == shift)
+                    ]
+                    if not month_df.empty
                     else pd.DataFrame()
                 )
 
                 if not r.empty:
                     row = r.iloc[0]
-                    show.append({
-                        "Ngày": datetime.strptime(
-                            ds,
-                            "%Y-%m-%d",
-                        ).strftime("%d/%m/%Y"),
+                    rows.append({
+                        "Ngày": datetime.strptime(ds, "%Y-%m-%d").strftime("%d/%m/%Y"),
                         "Ca": shift,
                         "Giờ vào": row.get("check_in", ""),
                         "Giờ ra": row.get("check_out", ""),
@@ -703,11 +680,8 @@ def employee_page():
                         "Ghi chú": row.get("note", ""),
                     })
                 else:
-                    show.append({
-                        "Ngày": datetime.strptime(
-                            ds,
-                            "%Y-%m-%d",
-                        ).strftime("%d/%m/%Y"),
+                    rows.append({
+                        "Ngày": datetime.strptime(ds, "%Y-%m-%d").strftime("%d/%m/%Y"),
                         "Ca": shift,
                         "Giờ vào": "",
                         "Giờ ra": "",
@@ -715,7 +689,8 @@ def employee_page():
                         "Ghi chú": "",
                     })
 
-        report = pd.DataFrame(show)
+        report = pd.DataFrame(rows)
+
         st.dataframe(
             report,
             use_container_width=True,
@@ -723,10 +698,8 @@ def employee_page():
         )
 
         output = io.BytesIO()
-        with pd.ExcelWriter(
-            output,
-            engine="openpyxl",
-        ) as writer:
+
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
             report.to_excel(
                 writer,
                 index=False,
@@ -739,8 +712,7 @@ def employee_page():
             "⬇️ XUẤT EXCEL THÁNG",
             output.getvalue(),
             file_name=(
-                f"Bang_cong_3_ca_"
-                f"{current_user['username']}_"
+                f"Bang_cong_3_ca_{current_user['username']}_"
                 f"{month:02d}_{year}.xlsx"
             ),
             mime=(
@@ -839,7 +811,7 @@ def admin_page():
                             st.error("Vui lòng nhập đủ thông tin.")
                         else:
                             try:
-                                insert_user(
+                                insert_row(
                                     "users",
                                     {
                                         "username": username.strip(),
