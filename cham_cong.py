@@ -369,6 +369,18 @@ def save_shift_settings(
     )
 
 
+def selected_shift_df(df):
+    if df.empty:
+        return df
+    tmp = df.copy()
+    # JSON booleans arrive from Supabase as real bools, but normalize safely.
+    tmp["_scheduled"] = tmp["scheduled"].map(
+        lambda x: bool(x) if isinstance(x, bool)
+        else str(x).strip().lower() in ("true", "1", "yes")
+    )
+    return tmp[tmp["_scheduled"]].copy()
+
+
 def shift_hours(settings, shift):
     if not settings:
         return 0.0
@@ -497,16 +509,20 @@ def render_calendar(username, key_prefix):
 
     if not df.empty:
         df["work_date"] = df["work_date"].astype(str).str[:10]
+
         for _, r in df.iterrows():
             ds = r["work_date"]
             records.setdefault(ds, {})[str(r.get("shift", "Sáng"))] = r.to_dict()
 
-    st.caption("☀️ Sáng · 🌤️ Chiều · 🌙 Tối — **tích trực tiếp vào ca muốn làm**.")
+    st.caption(
+        "☑️ Tích các ca muốn làm → bấm **Lưu lịch tháng** một lần. "
+        "Từ đó hệ thống mới ghi toàn bộ ca vào database."
+    )
 
-    # Nút tích ca: mỗi ngày 3 ô checkbox.
     weeks = calendar.Calendar(firstweekday=0).monthdayscalendar(
         int(year), int(month)
     )
+
     weekdays = ["T2", "T3", "T4", "T5", "T6", "T7", "CN"]
 
     head = st.columns(7)
@@ -516,51 +532,94 @@ def render_calendar(username, key_prefix):
             unsafe_allow_html=True
         )
 
-    for week in weeks:
-        cols = st.columns(7)
+    # IMPORTANT:
+    # One form for the whole month. Checkbox values are collected first,
+    # then persisted only when the user presses "Lưu lịch tháng".
+    with st.form(f"{key_prefix}_calendar_form"):
 
-        for idx, day in enumerate(week):
-            with cols[idx]:
-                if day == 0:
-                    st.markdown("<div style='min-height:150px'></div>", unsafe_allow_html=True)
-                    continue
+        selected = {}
 
-                ds = f"{int(year):04d}-{int(month):02d}-{day:02d}"
-                day_records = records.get(ds, {})
+        for week in weeks:
+            cols = st.columns(7)
 
-                st.markdown(
-                    f"<div class='day-number'>{day}</div>",
-                    unsafe_allow_html=True
-                )
+            for idx, day in enumerate(week):
+                with cols[idx]:
+                    if day == 0:
+                        st.markdown(
+                            "<div style='min-height:150px'></div>",
+                            unsafe_allow_html=True
+                        )
+                        continue
 
-                for shift in SHIFTS:
-                    rec = day_records.get(shift)
-                    checked = bool(rec and rec.get("scheduled", True))
-                    hours = float(rec.get("hours", 0) or 0) if rec else 0
+                    ds = f"{int(year):04d}-{int(month):02d}-{day:02d}"
+                    day_records = records.get(ds, {})
 
-                    new_checked = st.checkbox(
-                        f"{SHIFT_ICONS[shift]} {shift}",
-                        value=checked,
-                        key=f"{key_prefix}_{ds}_{shift}",
+                    st.markdown(
+                        f"<div class='day-number'>{day}</div>",
+                        unsafe_allow_html=True
                     )
 
-                    if new_checked != checked:
-                        try:
-                            if new_checked:
-                                save_shift(
-                                    username, ds, shift,
-                                    True, hours,
-                                    rec.get("note", "") if rec else ""
-                                )
-                            else:
-                                delete_shift(username, ds, shift)
-                            st.rerun()
-                        except Exception as e:
-                            st.error(safe_error(e))
+                    for shift in SHIFTS:
+                        rec = day_records.get(shift)
+                        checked = bool(
+                            rec and rec.get("scheduled", False)
+                        )
+
+                        selected[(ds, shift)] = st.checkbox(
+                            f"{SHIFT_ICONS[shift]} {shift}",
+                            value=checked,
+                            key=f"{key_prefix}_cb_{ds}_{shift}",
+                        )
+
+        save_calendar = st.form_submit_button(
+            "💾 LƯU LỊCH THÁNG",
+            use_container_width=True,
+        )
+
+        if save_calendar:
+            try:
+                # Save every checked cell.
+                # Unchecked cells are removed from the month's schedule.
+                for (ds, shift), checked in selected.items():
+                    existing = records.get(ds, {}).get(shift)
 
                     if checked:
-                        st.caption(f"{hours:g} giờ")
+                        old_hours = float(
+                            existing.get("hours", 0)
+                            if existing else 0
+                        )
+                        old_note = (
+                            existing.get("note", "")
+                            if existing else ""
+                        )
 
+                        save_shift(
+                            username,
+                            ds,
+                            shift,
+                            True,
+                            old_hours,
+                            old_note,
+                        )
+                    else:
+                        # Only delete if there was a saved record.
+                        if existing:
+                            delete_shift(
+                                username,
+                                ds,
+                                shift,
+                            )
+
+                st.success(
+                    f"✅ Đã lưu toàn bộ lịch tháng {int(month):02d}/{int(year)}."
+                )
+                st.rerun()
+
+            except Exception as e:
+                st.error("❌ Không lưu được lịch tháng.")
+                st.code(safe_error(e))
+
+    # Selected day is kept for compatibility with the rest of the app.
     selected_date = st.session_state.get(
         f"{key_prefix}_selected_date",
         today.isoformat()
@@ -666,7 +725,7 @@ def employee_page():
     total_shifts = 0
 
     if not df.empty:
-        df = df[df["scheduled"] == True].copy()
+        df = selected_shift_df(df)
         total_shifts = len(df)
         total_hours = sum(
             shift_hours(settings, str(shift))
