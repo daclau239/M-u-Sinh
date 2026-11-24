@@ -696,6 +696,110 @@ h2, h3 { color: var(--ink); font-weight: 700; letter-spacing: -0.01em; }
 .login-sub { color: var(--muted); font-size: 0.92rem; margin-top: 4px; }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+/* ============================================================
+   ÉP GIAO DIỆN SÁNG: bỏ màu đen/tối của chế độ dark
+   ============================================================ */
+:root, .stApp, [data-testid="stAppViewContainer"], [data-testid="stSidebar"] {
+    color-scheme: light !important;
+}
+
+/* Chữ: luôn đậm, dễ đọc */
+.stApp p, .stApp span, .stApp li, .stApp label,
+.stApp [data-testid="stMarkdownContainer"],
+.stApp [data-testid="stWidgetLabel"] p,
+.stApp [data-testid="stCheckbox"] label p,
+.stApp [data-testid="stMetricLabel"] p,
+.stApp [data-testid="stMetricValue"],
+.stApp [data-testid="stExpander"] summary p,
+.stApp h1, .stApp h2, .stApp h3, .stApp h4 {
+    color: var(--ink);
+}
+.stApp [data-testid="stCaptionContainer"], .stApp [data-testid="stCaptionContainer"] p {
+    color: var(--ink-soft) !important;
+}
+.stApp [data-testid="stWidgetLabel"] p { font-weight: 600; }
+[data-testid="stSidebar"] p, [data-testid="stSidebar"] span, [data-testid="stSidebar"] label { color: var(--ink); }
+.hero-title { color: var(--ink) !important; }
+.hero-sub { color: var(--ink-soft) !important; }
+.hero-chip { color: var(--teal-dark) !important; }
+.avatar { color: #fff !important; }
+.stApp [data-testid="stFormSubmitButton"] > button p,
+.stApp [data-testid="stDownloadButton"] > button p,
+.day-number.today { color: #fff !important; }
+[class*="st-key-cal_"][class*="_sang"]  [data-testid="stCheckbox"] label p { color: var(--sang) !important; }
+[class*="st-key-cal_"][class*="_chieu"] [data-testid="stCheckbox"] label p { color: var(--chieu) !important; }
+[class*="st-key-cal_"][class*="_toi"]   [data-testid="stCheckbox"] label p { color: var(--toi) !important; }
+
+/* Ô nhập: nền TRẮNG, chữ đậm */
+.stApp [data-baseweb="input"],
+.stApp [data-baseweb="base-input"],
+.stApp [data-baseweb="select"] > div,
+.stApp [data-baseweb="textarea"],
+.stApp input, .stApp textarea {
+    background: #FFFFFF !important;
+    color: var(--ink) !important;
+    -webkit-text-fill-color: var(--ink) !important;
+}
+.stApp [data-baseweb="input"], .stApp [data-baseweb="select"] > div, .stApp [data-baseweb="textarea"] {
+    border: 1px solid rgba(21,48,59,0.16) !important;
+    box-shadow: 0 1px 3px rgba(40,90,110,0.08) !important;
+}
+.stApp input::placeholder, .stApp textarea::placeholder { color: #8DA3AD !important; -webkit-text-fill-color: #8DA3AD !important; }
+.stApp [data-baseweb="select"] svg, .stApp [data-testid="stNumberInput"] button svg { fill: var(--ink-soft) !important; color: var(--ink-soft) !important; }
+.stApp [data-testid="stNumberInput"] button { background: #F3F7F9 !important; color: var(--ink) !important; border-color: rgba(21,48,59,0.12) !important; }
+.stApp [data-baseweb="select"] [data-baseweb="tag"], .stApp [data-baseweb="select"] div { color: var(--ink) !important; }
+
+/* Danh sách xổ xuống (hiện ngoài .stApp): nền trắng */
+[data-baseweb="popover"], [data-baseweb="popover"] > div,
+[data-baseweb="menu"], ul[role="listbox"] {
+    background: #FFFFFF !important;
+    color: var(--ink) !important;
+    border-radius: 14px;
+}
+[data-baseweb="popover"] li, [data-baseweb="menu"] li, ul[role="listbox"] li {
+    background: #FFFFFF !important; color: var(--ink) !important;
+}
+[data-baseweb="popover"] li:hover, [data-baseweb="menu"] li:hover, ul[role="listbox"] li[aria-selected="true"] {
+    background: #E6F6F5 !important; color: var(--teal-dark) !important;
+}
+
+/* Khối code (lỗi, SQL): nền sáng */
+.stApp [data-testid="stCode"], .stApp [data-testid="stCode"] pre, .stApp pre, .stApp code {
+    background: rgba(255,255,255,0.92) !important;
+    color: #1F3B47 !important;
+    border-radius: 12px;
+}
+.stApp [data-testid="stCode"] span { color: #1F3B47 !important; }
+
+/* Thông báo (success / error / info / warning): chữ rõ */
+.stApp [data-testid="stAlert"] p, .stApp [data-testid="stAlert"] span { color: var(--ink) !important; }
+
+/* Expander */
+.stApp [data-testid="stExpander"] details, .stApp [data-testid="stExpander"] summary { background: transparent !important; color: var(--ink); }
+
+/* ---------- Bảng TRẮNG (thay bảng đen của Streamlit) ---------- */
+.table-wrap {
+    background: #FFFFFF;
+    border: 1px solid rgba(21,48,59,0.10);
+    border-radius: 18px;
+    box-shadow: 0 6px 22px rgba(40,90,110,0.10);
+    overflow-x: auto;
+    margin: 6px 0 14px;
+}
+table.glass-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; background: #FFFFFF; }
+table.glass-table thead th {
+    background: #EEF6F8; color: var(--ink); font-weight: 700; text-align: left;
+    padding: 12px 16px; border-bottom: 1px solid rgba(21,48,59,0.10); white-space: nowrap;
+}
+table.glass-table tbody td {
+    color: var(--ink); padding: 11px 16px; border-bottom: 1px solid rgba(21,48,59,0.06);
+    background: #FFFFFF;
+}
+table.glass-table tbody tr:nth-child(even) td { background: #F8FBFC; }
+table.glass-table tbody tr:hover td { background: #E6F6F5; }
+table.glass-table tbody tr:last-child td { border-bottom: none; }
+table.glass-table td.num, table.glass-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.table-empty { padding: 18px; color: var(--ink-soft); }
 </style>
 """
 
@@ -841,6 +945,47 @@ XLSX_MIME = (
     "application/vnd.openxmlformats-officedocument."
     "spreadsheetml.sheet"
 )
+
+
+def render_table(df):
+    """Bảng HTML nền trắng, chữ đậm (không phụ thuộc theme tối của Streamlit)."""
+    import html as _html
+
+    if df is None or df.empty:
+        st.markdown(
+            '<div class="table-wrap"><div class="table-empty">Chưa có dữ liệu.</div></div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    num_cols = {"Số giờ", "Lương/giờ", "Tiền ca"}
+    cols = list(df.columns)
+
+    head = "".join(
+        f'<th class="{"num" if c in num_cols else ""}">{_html.escape(str(c))}</th>'
+        for c in cols
+    )
+
+    body = []
+    for _, row in df.iterrows():
+        tds = []
+        for c in cols:
+            v = row[c]
+            if c == "Số giờ":
+                txt = f"{float(v):g}"
+            elif c in ("Lương/giờ", "Tiền ca"):
+                txt = f"{float(v):,.0f}"
+            else:
+                txt = "" if pd.isna(v) else str(v)
+            cls = "num" if c in num_cols else ""
+            tds.append(f'<td class="{cls}">{_html.escape(txt)}</td>')
+        body.append("<tr>" + "".join(tds) + "</tr>")
+
+    st.markdown(
+        '<div class="table-wrap"><table class="glass-table">'
+        f"<thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table></div>",
+        unsafe_allow_html=True,
+    )
 
 
 # ============================================================
@@ -1284,7 +1429,7 @@ def employee_page():
 
     report = build_report(df, settings, hourly_rate, vn_date=True)
 
-    st.dataframe(report, use_container_width=True, hide_index=True)
+    render_table(report)
 
     st.download_button(
         "⬇️ Xuất Excel",
@@ -1361,14 +1506,10 @@ def admin_page():
                 "position": "Chức vụ",
             })
 
-            st.dataframe(
-                display[[
+            render_table(display[[
                     "Tài khoản", "Họ tên", "Vai trò",
                     "Bộ phận", "Chức vụ", "Trạng thái",
-                ]],
-                use_container_width=True,
-                hide_index=True,
-            )
+                ]])
 
         with st.expander("➕ Tạo tài khoản"):
             with st.form("create_user"):
@@ -1480,11 +1621,7 @@ def admin_page():
                     df, settings, hourly_rate, vn_date=False,
                 )
 
-                st.dataframe(
-                    report,
-                    use_container_width=True,
-                    hide_index=True,
-                )
+                render_table(report)
 
                 st.download_button(
                     "⬇️ Xuất bảng lương",
