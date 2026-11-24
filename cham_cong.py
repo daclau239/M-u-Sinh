@@ -153,20 +153,8 @@ create table if not exists public.monthly_shift_settings (
     unique(username, year, month)
 );
 
--- 4. Admin mặc định: admin / admin123
-insert into public.users
-(username, password_hash, full_name, role, department, position, active)
-values
-(
-    'admin',
-    '240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9',
-    'Quản trị viên',
-    'admin',
-    'Quản trị',
-    'Administrator',
-    true
-)
-on conflict (username) do nothing;
+-- 4. Tài khoản admin: KHÔNG tạo sẵn trong code.
+-- Tạo/đổi mật khẩu admin riêng trong Supabase SQL Editor (không đưa vào app).
 """
 
 
@@ -1052,8 +1040,8 @@ if not st.session_state.logged_in:
             """
 <div class="login-brand">
   <div class="login-logo">🕘</div>
-  <div class="login-title">CHẤM CÔNG GÌ CHƯA NGƯỜI ĐẸP</div>
-  <div class="login-sub">Bé Chúi • Dễ Huông • Đáng iuuuu</div>
+  <div class="login-title">Web chấm công</div>
+  <div class="login-sub">Lịch 3 ca • Tự tính giờ • Tự tính lương</div>
 </div>
 """,
             unsafe_allow_html=True,
@@ -1087,8 +1075,6 @@ if not st.session_state.logged_in:
                 except Exception as e:
                     st.error("Lỗi đăng nhập.")
                     st.code(safe_error(e))
-
-        st.caption("Admin mặc định: admin / admin123")
 
     st.stop()
 
