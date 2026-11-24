@@ -1040,8 +1040,8 @@ if not st.session_state.logged_in:
             """
 <div class="login-brand">
   <div class="login-logo">🕘</div>
-  <div class="login-title">Web chấm công</div>
-  <div class="login-sub">Lịch 3 ca • Tự tính giờ • Tự tính lương</div>
+  <div class="login-title">Chấm công người đẹp ơi</div>
+  <div class="login-sub">Bé Chúiiii • Dễ Huônggggg • Đáng iuuuuu</div>
 </div>
 """,
             unsafe_allow_html=True,
